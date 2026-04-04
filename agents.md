@@ -126,7 +126,7 @@ bartpy/                           ← repository root
 │   │   ├── fft.py                ← fft(), ifft(), nufft()
 │   │   ├── phantom.py            ← phantom()
 │   │   ├── linops.py             ← BartLinop (with __matmul__, __add__, __call__)
-│   │   ├── encoding.py           ← sense_op(), nufft_op() (full forward encoding ops)
+│   │   ├── encoding.py           ← sense_op(), nufft_op(), nufft_tseg_op(), wave_op(), subspace_op(), sense_espirit_op()
 │   │   ├── regularizers.py       ← wavelet_op(), tv_op(), llr_op(), lr_op()
 │   │   ├── pics.py               ← ecalib(), caldir(), pics()
 │   │   └── italgos.py            ← conjgrad(), ist(), fista(), irgnm(), chambolle_pock()
@@ -446,6 +446,10 @@ factory functions (`chain()`, `plus()`, etc.).
 **Full forward encoding operators** (return `BartLinop`):
 - `bt.sense_op(sens, mask=None)` — Cartesian SENSE (multi-coil)
 - `bt.nufft_op(traj, shape, ...)` — Non-Cartesian SENSE encoding
+- `bt.nufft_tseg_op(traj, shape, b0, ti, ...)` — Time-segmented NuFFT with B0 off-resonance correction (`tse()`)
+- `bt.wave_op(sens, wave_traj, ...)` — Wave-CAIPI / Wave Shuffling encoding (`linop_wavelet_create()` + k-space PSF)
+- `bt.subspace_op(basis, ...)` — Subspace-projected encoding (coefficient → k-space, e.g. T2 shuffling, XD-GRASP)
+- `bt.sense_espirit_op(kspace, ...)` — Expanded ESPIRiT multi-map operator (joint estimation via `maps2_create()`)
 - `bt.pics(kspace, sens, ...)` — convenience wrapper (ecalib + SENSE + PICS)
 
 **Regularizers** (return `BartLinop` / proximal `BartProxOp`):
@@ -462,8 +466,9 @@ factory functions (`chain()`, `plus()`, etc.).
 - `bt.chambolle_pock(K, prox_f, prox_g, ...)` — primal-dual
 
 **Nonlinear operators** (return `BartNlinOp`):
-- `bt.moba_op(...)` — model-based reconstruction (MOBA)
-- `bt.nlinv_op(...)` — nonlinear inversion (joint image + sensitivity)
+- `bt.nlinv_op(...)` — nonlinear inversion for joint image + sensitivity estimation (`struct noir_s*`)
+- `bt.moba_op(model, ...)` — model-based reconstruction (T1/T2/T2*/diffusion via `moba`)
+- `bt.noir_op(...)` — NOIR nonlinear operator (full NOIR forward + Jacobian)
 
 **Low-level CLI access** (subprocess path):
 - `bartorch.tools.*` — auto-generated wrappers for all 100+ BART CLI tools
@@ -518,7 +523,13 @@ factory functions (`chain()`, `plus()`, etc.).
   - `__call__`, `__matmul__`, `__add__`, `__mul__` / `__rmul__`, `.H`, `.N`
   - Composition and sum build BART's `linop_chain()` / `linop_plus()` internally
   - `ishape` / `oshape` in C-order (reversed from BART's Fortran dims)
-- [ ] Implement `bartorch/ops/encoding.py`: `sense_op()`, `nufft_op()`
+- [ ] Implement `bartorch/ops/encoding.py`:
+  - `sense_op()` — Cartesian SENSE via `linop_cdiag_create()` + `linop_fft_create()`
+  - `nufft_op()` — Non-Cartesian SENSE via `nufft_create()`
+  - `nufft_tseg_op()` — Time-segmented NuFFT via `tse()` + `nufft_create()`
+  - `wave_op()` — Wave-CAIPI via `linop_wavelet_create()` + k-space PSF modulation
+  - `subspace_op()` — Subspace projection via `linop_cdiag_create()` + basis (`linop_extract_create()`)
+  - `sense_espirit_op()` — Expanded ESPIRiT multi-map via `maps2_create()`
 - [ ] Integration tests for forward encoding round-trip
 
 ### Phase 4 — Regularizers & Proximal Operators
@@ -538,8 +549,9 @@ factory functions (`chain()`, `plus()`, etc.).
 
 ### Phase 6 — Nonlinear Operators
 - [ ] `BartNlinOp`: wrapping BART's `struct nlop_s*`
-  - `nlinv_op()` — joint image + sensitivity estimation
-  - `moba_op()` — model-based reconstruction
+  - `nlinv_op()` — joint image + sensitivity estimation (NLINV / NOIR)
+  - `moba_op(model)` — model-based reconstruction for T1/T2/T2*/diffusion
+  - `noir_op()` — NOIR full forward + Jacobian
 - [ ] Tests for nonlinear forward + Jacobian
 
 ### Phase 7 — Auto-generated Tools (`bartorch.tools`)
@@ -709,9 +721,10 @@ already implemented in BART and their exposure status in bartorch.
 | Aspect | Detail |
 |---|---|
 | Source | `src/simu/tsegf.c`, `src/simu/tsegf.h` |
-| C API | `tse()`, `tse_der()`, `tse_adj()` — analytical phase accumulation |
-| Tools | Used in MOBA model-based reconstruction |
-| Bartorch | ❌ Not yet exposed — Phase 3+ target |
+| C API | `tse()`, `tse_der()`, `tse_adj()` — analytical phase accumulation for multiple time segments |
+| Notes | Composed with `nufft_create()` to produce a full time-segmented encoding operator; each segment applies a phase map and NuFFT, then sums |
+| Tools | Used in MOBA, NLINV |
+| Bartorch | ❌ Not yet exposed — Phase 3 target: `bt.nufft_tseg_op()` |
 
 ### 11.4 Low-Rank Subspace / Casorati Operator
 
@@ -728,9 +741,30 @@ already implemented in BART and their exposure status in bartorch.
 | Aspect | Detail |
 |---|---|
 | Source | `src/linops/waveop.c/.h` |
-| C API | `linop_wavelet_create()` — Haar, Daubechies-2, CDF-4/4 wavelet types |
+| C API | `linop_wave_create()` — PSF modulation along the readout for Wave-CAIPI acceleration |
+| Notes | Distinct from `linop_wavelet_create()` (wavelet sparsity); applies oscillating gradient PSF in k-space |
 | Tools | `wave` |
-| Bartorch | ❌ Not yet exposed — Phase 3+ target |
+| Bartorch | ❌ Not yet exposed — Phase 3 target: `bt.wave_op()` |
+
+### 11.5b Expanded ESPIRiT
+
+| Aspect | Detail |
+|---|---|
+| Source | `src/calib/calib.c/.h`, `src/sense/model.c/.h` |
+| C API | `maps2_create()` — multi-map ESPIRiT operator (more than one set of maps); `calib2()` for calibration |
+| Notes | Handles multi-set coil maps for improved conditioning in regions of signal overlap; returns full `linop_s*` |
+| Tools | `ecalib -m 2`, `pics` |
+| Bartorch | ❌ Not yet exposed — Phase 3 target: `bt.sense_espirit_op()` |
+
+### 11.5c Subspace Projection Encoding
+
+| Aspect | Detail |
+|---|---|
+| Source | `src/linops/someops.c/.h`, `src/linops/casorati.c/.h` |
+| C API | `linop_extract_create()`, `linop_slice_create()`, `linop_cdiag_create()` |
+| Notes | Projects coefficient images onto a temporal/spectral subspace basis (e.g. T2 shuffling, XD-GRASP, BART's `pics -B`); composed with `nufft_create()` for full subspace encoding |
+| Tools | `pics -B <basis>` |
+| Bartorch | ❌ Not yet exposed — Phase 3 target: `bt.subspace_op()` |
 
 ### 11.6 Sensitivity Calibration (already exposed)
 
@@ -781,17 +815,20 @@ The following are implemented in BART and should be exposed in Phase 2–3:
 2. `linop_fft_create()` / `linop_fftc_create()` — Cartesian FFT as linop
 3. `linop_cdiag_create()` — Coil sensitivity encoding (`bt.sense_op`)
 4. `linop_grad_create()` — Required to build TV regularization (`bt.tv_op`)
+5. `tse()` + `nufft_create()` — Time-segmented NuFFT (`bt.nufft_tseg_op`)
+6. `linop_wave_create()` — Wave-CAIPI PSF modulation (`bt.wave_op`)
+7. `linop_extract_create()` + `linop_cdiag_create()` — Subspace encoding (`bt.subspace_op`)
+8. `maps2_create()` + `calib2()` — Expanded ESPIRiT multi-map (`bt.sense_espirit_op`)
 
 **Phase 4 priorities** (regularizers + proximal ops):
-5. `linop_wavelet_create()` — Wavelet sparsity (`bt.wavelet_op`)
-6. `linop_casorati_create()` + `lrthresh_create()` — Locally low-rank (`bt.llr_op`)
-7. `nuclearnorm()` / `svthresh()` — Global low-rank prox (`bt.lr_op`)
+9. `linop_wavelet_create()` — Wavelet sparsity (`bt.wavelet_op`)
+10. `linop_casorati_create()` + `lrthresh_create()` — Locally low-rank (`bt.llr_op`)
+11. `nuclearnorm()` / `svthresh()` — Global low-rank prox (`bt.lr_op`)
 
 **Phase 5–6 (advanced):**
-8. `sense_nc_init()` / `maps_create()` — Full Non-Cartesian SENSE linop
-9. `tse()` — Time segmentation for B0 correction (MOBA-style)
-10. NLOP framework (`struct nlop_s*`) — `nlinv_op()`, `moba_op()`
-11. Wave-CAIPI and motion operators
+12. NLOP framework (`struct nlop_s*`) — `nlinv_op()`, `moba_op()`, `noir_op()`
+13. `tse_der()` / `tse_adj()` — Jacobian of time-segmented encoding (for IRGNM)
+14. Wave-CAIPI and motion operators (`linop_interpolate_create()`)
 
 ---
 

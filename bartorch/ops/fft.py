@@ -2,7 +2,8 @@
 
 Provides multidimensional FFT and inverse-FFT via BART's ``num/fft`` module.
 All functions accept plain ``torch.Tensor`` inputs (cast to ``complex64``
-automatically) and return a plain ``torch.Tensor``.
+automatically by :func:`~bartorch.core.tensor.bart_op`) and return a plain
+``torch.Tensor``.
 """
 
 from __future__ import annotations
@@ -10,10 +11,12 @@ from __future__ import annotations
 import torch
 
 from bartorch.core.graph import dispatch
+from bartorch.core.tensor import bart_op
 
 __all__ = ["fft", "ifft"]
 
 
+@bart_op
 def fft(
     input: torch.Tensor,
     flags: int,
@@ -63,6 +66,7 @@ def fft(
     )
 
 
+@bart_op
 def ifft(
     input: torch.Tensor,
     flags: int,
@@ -95,4 +99,12 @@ def ifft(
     >>> kspace  = ops.fft(ph, flags=3)
     >>> img_rec = ops.ifft(kspace, flags=3)
     """
-    return fft(input, flags, unitary=unitary, inverse=True, centered=centered)
+    # Input is already complex64 — normalised by the @bart_op decorator on ifft.
+    return dispatch(
+        "fft",
+        [input],
+        None,
+        flags=flags,
+        u=unitary,
+        i=True,
+    )

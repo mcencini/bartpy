@@ -2,9 +2,14 @@
 bartorch.ops — Public Python API for BART operations.
 
 Every function in this sub-package routes through
-:func:`bartorch.core.graph.dispatch`, which selects the hot path (zero-copy
-C++ extension) or the subprocess fallback automatically.  All ops accept and
-return plain ``torch.Tensor`` objects (``dtype=torch.complex64``).
+:func:`bartorch.core.graph.dispatch`, which calls the embedded BART C++
+extension.  The :func:`~bartorch.core.tensor.bart_op` decorator applied to
+each op handles input normalisation automatically:
+
+* ``torch.Tensor`` of any dtype → cast to ``complex64`` (zero-copy if already
+  correct)
+* ``numpy.ndarray`` → converted to ``complex64`` ``torch.Tensor``
+* All other arguments pass through unchanged
 
 Available ops
 -------------

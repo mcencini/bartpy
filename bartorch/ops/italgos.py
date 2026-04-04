@@ -2,7 +2,9 @@
 
 Wraps BART's iterative solvers and proximal algorithms from
 ``src/iter/``.  All functions accept :class:`~bartorch.ops.linops.BartLinop`
-operators and plain ``torch.Tensor`` data vectors.
+operators and plain ``torch.Tensor`` data vectors.  Input tensors are
+normalised automatically by the :func:`~bartorch.core.tensor.bart_op`
+decorator.
 
 These are currently stubs pending the C++ extension (Phase 5).
 
@@ -15,11 +17,13 @@ from __future__ import annotations
 
 import torch
 
+from bartorch.core.tensor import bart_op
 from bartorch.ops.linops import BartLinop
 
 __all__ = ["conjgrad", "ist", "fista", "irgnm", "chambolle_pock"]
 
 
+@bart_op
 def conjgrad(
     op: BartLinop,
     b: torch.Tensor,
@@ -55,6 +59,7 @@ def conjgrad(
     raise NotImplementedError("italgos.conjgrad() requires the C++ extension.")
 
 
+@bart_op
 def ist(
     op: BartLinop,
     b: torch.Tensor,
@@ -94,6 +99,7 @@ def ist(
     raise NotImplementedError("italgos.ist() requires the C++ extension.")
 
 
+@bart_op
 def fista(
     op: BartLinop,
     b: torch.Tensor,
@@ -131,6 +137,7 @@ def fista(
     raise NotImplementedError("italgos.fista() requires the C++ extension.")
 
 
+@bart_op
 def irgnm(
     op: BartLinop,
     b: torch.Tensor,
@@ -165,6 +172,7 @@ def irgnm(
     raise NotImplementedError("italgos.irgnm() requires the C++ extension.")
 
 
+@bart_op
 def chambolle_pock(
     op: BartLinop,
     prox_f,

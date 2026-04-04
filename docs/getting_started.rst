@@ -30,7 +30,7 @@ The axis reversal is handled transparently at the C++ boundary — no data copy.
 Installation
 ------------
 
-**Standard install** (requires a C++ compiler, CMake, and BART dependencies):
+**From source** (requires a C++ compiler, CMake):
 
 .. code-block:: bash
 
@@ -38,15 +38,14 @@ Installation
    cd bartpy
    pip install -e .
 
-**Pure-Python / subprocess fallback** (no C++ extension compiled):
+**Prebuilt wheel** (CPU or CUDA):
 
 .. code-block:: bash
 
-   BARTORCH_SKIP_EXT=1 pip install -e . --no-build-isolation
+   pip install bartorch
 
-In this mode bartorch writes CFL file pairs to ``/dev/shm`` (Linux RAM-backed
-tmpfs) and invokes BART as a subprocess — no disk I/O, but with a per-call
-process-spawn overhead.
+The C++ extension embeds BART and links to the BLAS and FFT libraries bundled
+with PyTorch — no external ``bart`` binary is required.
 
 Quickstart
 ----------
@@ -73,20 +72,25 @@ Quickstart
    # C = A @ ops.wavelet_op(A.ishape)   # operator composition
    # y = A(x)                           # forward application
 
-Hot path vs subprocess fallback
---------------------------------
+How It Works
+------------
 
-When the C++ extension (``_bartorch_ext``) is compiled and available, all ops
-execute via the in-memory CFL registry — BART reads and writes directly into
-PyTorch tensor memory with zero copies.
+All ops are decorated with :func:`~bartorch.core.tensor.bart_op`, which
+normalises every tensor argument automatically:
 
-When the extension is absent (``BARTORCH_SKIP_EXT=1`` or build failure), the
-dispatcher falls back to ``bartorch.pipe``, which writes standard CFL file
-pairs to ``/dev/shm`` and runs BART as a subprocess.  Both paths produce
-identical numerical results.
+- ``torch.Tensor`` of any dtype → cast to ``complex64`` (zero-copy if already correct)
+- ``numpy.ndarray`` → converted to ``complex64`` ``torch.Tensor``
+- Non-array arguments (ints, strings, …) pass through unchanged
+
+The :func:`~bartorch.core.graph.dispatch` function routes each call through
+the embedded C++ extension (``_bartorch_ext``):
+
+1. Each tensor's ``data_ptr()`` is registered in BART's in-memory CFL registry.
+2. ``bart_command()`` runs the BART tool in-process — no subprocess, no disk I/O.
+3. Output is returned as a plain ``complex64`` ``torch.Tensor`` in C-order.
 
 .. note::
 
-   The subprocess fallback requires a ``bart`` binary on ``$PATH``.
-   The C++ extension embeds BART directly and does **not** require an external
-   ``bart`` binary.
+   There is no subprocess fallback.  bartorch requires the compiled C++
+   extension.  Install from source (``pip install -e .``) or via a prebuilt
+   wheel (``pip install bartorch``).

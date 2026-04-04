@@ -11,10 +11,12 @@ from typing import Literal
 import torch
 
 from bartorch.core.graph import dispatch
+from bartorch.core.tensor import bart_op
 
 __all__ = ["phantom"]
 
 
+@bart_op
 def phantom(
     dims: list[int],
     *,

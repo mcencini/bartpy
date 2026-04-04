@@ -7,6 +7,10 @@ Architecture Overview
 All bartorch ops accept and return plain ``torch.Tensor`` (``complex64``).
 There is no user-visible ``BartTensor`` subclass.
 
+Input normalisation (complex64 cast, numpy → tensor conversion) is performed
+automatically by the :func:`~bartorch.core.tensor.bart_op` decorator applied
+to every public op function — no manual conversion is ever needed.
+
 Axis convention
 ~~~~~~~~~~~~~~~
 
@@ -21,45 +25,48 @@ The axis reversal is handled transparently.  A C-order ``(coils, ny, nx)``
 array and a Fortran-order ``(nx, ny, coils)`` array have **identical byte
 layouts** — so reversing the dims at the boundary is a zero-copy operation.
 
-bartorch has three execution tiers:
+Execution path
+~~~~~~~~~~~~~~
 
 **Hot path (C++ extension)**
-   All-bartorch call chains execute entirely in C via the embedded BART
-   ``bart_command()`` dispatcher.  Each tensor's ``data_ptr()`` is registered
-   in BART's in-memory CFL registry via ``register_mem_cfl_non_managed()``;
-   BART reads and writes directly into tensor memory.  The C++ bridge reverses
-   the dimension array before registration — zero copies, zero subprocess
-   overhead.
-
-**Subprocess fallback (``bartorch.pipe``)**
-   When the C++ extension is unavailable, ops write CFL file pairs (``.hdr`` +
-   ``.cfl``) to ``/dev/shm`` (Linux RAM-backed tmpfs) and invoke a ``bart``
-   subprocess.  The ``.hdr`` carries reversed (Fortran) dims; the ``.cfl``
-   contains raw C-order bytes — same byte layout, no copy.  No physical disk
-   I/O occurs on Linux.
+   All ops execute via the embedded BART ``bart_command()`` dispatcher.  Each
+   tensor's ``data_ptr()`` is registered in BART's in-memory CFL registry via
+   ``register_mem_cfl_non_managed()``; BART reads and writes directly into
+   tensor memory.  The C++ bridge reverses the dimension array before
+   registration — zero copies, no disk I/O.
 
 **CUDA path**
    BART's virtual-pointer (vptr) system detects device memory via
    ``cudaPointerGetAttributes()`` and routes arithmetic to GPU kernels
    automatically.  GPU zero-copy requires BART compiled with ``USE_CUDA=ON``.
 
-Dispatch logic (``bartorch.core.graph``)::
+.. note::
 
-   dispatch(op, inputs, output_dims, **kwargs)
+   There is no subprocess fallback.  bartorch requires the compiled
+   ``_bartorch_ext`` C++ extension, which embeds BART and links to the BLAS
+   and FFT libraries bundled with PyTorch.  No external ``bart`` binary is
+   needed.
+
+Dispatch flow::
+
+   user calls: ops.fft(input, flags=3)
      │
-     │  Normalise all inputs to complex64 torch.Tensor
+     │  @bart_op decorator (on fft):
+     │    • cast all tensor args to complex64  (zero-copy if already correct)
+     │    • convert numpy arrays → complex64 torch.Tensor
+     │    • pass non-array args unchanged
      │
-     ├─ C++ ext available?
-     │   → Hot path: _bartorch_ext.run()
-     │     • registers data_ptr() with reversed dims in BART CFL registry
-     │     • calls bart_command() in-process
-     │     • returns plain torch.Tensor
+     ▼
+   dispatch("fft", [input], None, flags=3)
      │
-     └─ C++ ext not available?
-         → Subprocess fallback: bartorch.pipe.run_subprocess()
-           • writes CFL pairs to /dev/shm with reversed dims in header
-           • spawns bart subprocess
-           • reads output CFL, reverses dims back, returns plain torch.Tensor
+     ▼
+   _get_ext()  →  raises ImportError if extension absent
+     │
+     ▼
+   _bartorch_ext.run("fft", inputs, output_dims, kwargs)
+     • registers data_ptr() with reversed dims in BART CFL registry
+     • calls bart_command() in-process
+     • returns plain torch.Tensor (complex64, C-order)
 
 Building the C++ Extension
 ---------------------------
@@ -69,16 +76,15 @@ Prerequisites:
 - CMake ≥ 3.18
 - C++17 compiler (GCC ≥ 9, Clang ≥ 11)
 - PyTorch (CPU or CUDA wheel)
-- FFTW3, BLAS (or use PyTorch's bundled libraries)
+
+The extension links to PyTorch's bundled BLAS and FFT — no separate FFTW3 or
+BLAS installation required.
 
 .. code-block:: bash
 
    git clone --recurse-submodules https://github.com/mcencini/bartpy
    cd bartpy
    pip install -e .
-
-The ``setup.py`` CMake driver will build the BART static library and link
-``_bartorch_ext.so`` against it and PyTorch's bundled libraries.
 
 To build with CUDA support:
 
@@ -97,8 +103,18 @@ Adding New Ops
    Expose the function via ``pybind11``.
 
 3. **Python op module** (e.g. ``bartorch/ops/mynewop.py``):
-   Wrap the binding or dispatch call.  Accept ``torch.Tensor``, return
-   ``torch.Tensor``.  Do not expose ``BartTensor`` in the public signature.
+
+   .. code-block:: python
+
+      from bartorch.core.graph import dispatch
+      from bartorch.core.tensor import bart_op
+
+      @bart_op
+      def my_new_op(input: torch.Tensor, ...) -> torch.Tensor:
+          return dispatch("my_tool", [input], None, ...)
+
+   The ``@bart_op`` decorator handles all dtype normalisation automatically.
+   Accept and return plain ``torch.Tensor``.
 
 4. **Export** from ``bartorch/ops/__init__.py``.
 
@@ -113,11 +129,10 @@ Run the full test suite:
 
    pytest tests/ -v
 
-Run only unit tests that do not require BART or the C++ extension:
-
-.. code-block:: bash
-
-   BARTORCH_SKIP_EXT=1 pytest tests/ -v -k "not integration"
+The unit tests (``test_tensor.py``, ``test_linops.py``, ``test_context.py``,
+``test_cfl.py``) do not require the C++ extension and run against the Python
+stubs.  Integration tests in ``tests/test_ops.py`` require the compiled
+extension.
 
 Pre-commit Setup
 ----------------

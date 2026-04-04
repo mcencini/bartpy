@@ -12,10 +12,12 @@ from __future__ import annotations
 import torch
 
 from bartorch.core.graph import dispatch
+from bartorch.core.tensor import bart_op
 
 __all__ = ["ecalib", "caldir", "pics"]
 
 
+@bart_op
 def ecalib(
     kspace: torch.Tensor,
     *,
@@ -64,6 +66,7 @@ def ecalib(
     )
 
 
+@bart_op
 def caldir(
     kspace: torch.Tensor,
     *,
@@ -95,6 +98,7 @@ def caldir(
     return dispatch("caldir", [kspace], None, r=calib_size)
 
 
+@bart_op
 def pics(
     kspace: torch.Tensor,
     sens: torch.Tensor,

@@ -1,0 +1,84 @@
+name: Docs (ReadTheDocs)
+
+# This workflow triggers a ReadTheDocs build whenever documentation-relevant
+# files are updated on the main branch.
+#
+# Setup instructions:
+# 1. Create an account at https://readthedocs.org and import this repository.
+# 2. In your RTD project settings, go to Integrations and copy the webhook URL.
+# 3. Add it as a repository secret: Settings → Secrets → READTHEDOCS_WEBHOOK_TOKEN
+#    (RTD uses a token in the URL, not a separate header secret).
+# 4. Uncomment the "Trigger ReadTheDocs build" step below.
+#
+# The workflow also validates that the docs build without errors using a local
+# Sphinx build on every pull request.
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "docs/**"
+      - "bartorch/**"
+      - "*.md"
+      - "*.rst"
+  pull_request:
+    branches: [main, develop]
+    paths:
+      - "docs/**"
+      - "bartorch/**"
+
+jobs:
+  # -------------------------------------------------------------------------
+  # Job 1: validate docs build locally (runs on every PR and push)
+  # -------------------------------------------------------------------------
+  build-docs:
+    name: Build Sphinx docs
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: false   # submodule not needed for docs
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+
+      - name: Install system dependencies
+        run: sudo apt-get install -y pandoc
+
+      - name: Install docs dependencies
+        run: |
+          pip install scikit-build-core
+          BARTORCH_SKIP_EXT=1 pip install -e ".[docs]" --no-build-isolation
+          pip install -r docs/requirements.txt
+
+      - name: Build Sphinx HTML
+        run: sphinx-build -W --keep-going -b html docs docs/_build/html
+
+      - name: Upload docs artifact
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: sphinx-html
+          path: docs/_build/html/
+          retention-days: 7
+
+  # -------------------------------------------------------------------------
+  # Job 2: trigger ReadTheDocs webhook (only on push to main)
+  # Uncomment once RTD webhook URL is stored as a secret.
+  # -------------------------------------------------------------------------
+  # trigger-rtd:
+  #   name: Trigger ReadTheDocs
+  #   runs-on: ubuntu-latest
+  #   needs: build-docs
+  #   if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+  #
+  #   steps:
+  #     - name: Trigger ReadTheDocs build
+  #       run: |
+  #         curl -X POST \
+  #           -d "branches=main" \
+  #           -d "token=${{ secrets.READTHEDOCS_WEBHOOK_TOKEN }}" \
+  #           https://readthedocs.org/api/v2/webhook/bartorch/<YOUR_RTD_PROJECT_ID>/

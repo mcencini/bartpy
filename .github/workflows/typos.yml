@@ -1,0 +1,19 @@
+name: Typos
+
+on:
+  push:
+    branches: [main, develop]
+  pull_request:
+    branches: [main, develop]
+
+jobs:
+  typos:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install codespell
+        run: pip install codespell
+
+      - name: Run codespell
+        run: codespell --skip="attic/,bart/,.git/,*.ipynb,pyproject.toml" --ignore-words-list=ist

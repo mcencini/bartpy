@@ -1,0 +1,194 @@
+name: Publish to PyPI
+
+# This workflow publishes bartorch to PyPI whenever a version tag (v*) is
+# pushed.  It uses PyPI's Trusted Publisher (OIDC) mechanism — no API token
+# needs to be stored as a secret.
+#
+# Setup instructions (one-time, done on PyPI):
+# 1. Go to https://pypi.org/manage/account/publishing/ (or the project page
+#    after the first manual upload).
+# 2. Add a "Trusted Publisher":
+#    - Owner:      mcencini
+#    - Repository: bartpy
+#    - Workflow:   publish.yml
+#    - Environment: pypi
+# 3. Create the "pypi" environment in this repo:
+#    Settings → Environments → New environment → name it "pypi"
+#    Add a protection rule requiring a reviewer before deployment (recommended).
+#
+# The workflow also publishes to TestPyPI on every push to main (using the
+# "testpypi" environment and the test.pypi.org trusted publisher).
+
+on:
+  push:
+    tags:
+      - "v*"    # e.g. v0.1.0, v1.0.0rc1
+  # Uncomment to also publish to TestPyPI on main:
+  # push:
+  #   branches: [main]
+
+jobs:
+  # -------------------------------------------------------------------------
+  # Job 1: Build the source distribution and wheel
+  # -------------------------------------------------------------------------
+  build:
+    name: Build distribution
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive   # needed for BART submodule
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install build tools
+        run: pip install build scikit-build-core
+
+      - name: Build sdist and wheel (pure-Python, no C++ ext)
+        # Use BARTORCH_SKIP_EXT=1 to build a pure-Python wheel that works
+        # without a C compiler.  The C++ extension wheel is built separately
+        # via cibuildwheel (see below, currently commented out).
+        # scikit-build-core is the build backend declared in pyproject.toml.
+        env:
+          BARTORCH_SKIP_EXT: "1"
+        run: python -m build
+
+      - name: Store distribution artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: python-package-distributions
+          path: dist/
+
+  # -------------------------------------------------------------------------
+  # (Optional) Job 1b: Build binary wheels with cibuildwheel
+  # Uncomment once the C++ extension build is stable.
+  #
+  # How PyTorch's bundled BLAS / FFT are used
+  # ------------------------------------------
+  # setup.py passes -DCMAKE_PREFIX_PATH=$(python -c "import torch;
+  # print(torch.utils.cmake_prefix_path)") to CMake.  CMakeLists.txt calls
+  # find_package(Torch REQUIRED), which sets TORCH_LIBRARIES to PyTorch's
+  # bundled MKL/OpenBLAS + cuFFT/FFTW objects.  BART's static lib is then
+  # linked with:
+  #
+  #   target_link_libraries(bart_static PUBLIC ${TORCH_LIBRARIES})
+  #
+  # so the compiled extension always resolves BLAS/FFT from the same PyTorch
+  # wheel that the user installed — no separate FFTW or OpenBLAS is vendored.
+  #
+  # The critical step is CIBW_BEFORE_BUILD: it must install PyTorch *before*
+  # cmake runs so that setup.py can resolve torch.utils.cmake_prefix_path.
+  # -------------------------------------------------------------------------
+  # build-wheels:
+  #   name: Build binary wheels (${{ matrix.os }})
+  #   runs-on: ${{ matrix.os }}
+  #   strategy:
+  #     matrix:
+  #       os: [ubuntu-latest, macos-latest, windows-latest]
+  #   steps:
+  #     - uses: actions/checkout@v4
+  #       with:
+  #         submodules: recursive
+  #     - uses: pypa/cibuildwheel@v2.19
+  #       env:
+  #         CIBW_BUILD: "cp310-* cp311-* cp312-*"
+  #         CIBW_SKIP: "*-musllinux_*"
+  #         # Install PyTorch before the CMake configure step so that
+  #         # setup.py can call torch.utils.cmake_prefix_path and
+  #         # CMake's find_package(Torch) resolves ${TORCH_LIBRARIES}
+  #         # (PyTorch's bundled MKL/OpenBLAS + FFTW/cuFFT).
+  #         # Without this step the build would fail with "No module named torch".
+  #         CIBW_BEFORE_BUILD: pip install "torch>=2.0" --index-url https://download.pytorch.org/whl/cpu
+  #         # Pass extra CMake flags through setup.py's CMAKE_ARGS env var.
+  #         # -DUSE_CUDA=OFF  → CPU-only wheel (CUDA wheels need a separate
+  #         #                    matrix row with CIBW_BEFORE_BUILD installing
+  #         #                    torch from the cuda* index URL).
+  #         CIBW_ENVIRONMENT: "CMAKE_ARGS='-DUSE_CUDA=OFF'"
+  #     - uses: actions/upload-artifact@v4
+  #       with:
+  #         name: wheels-${{ matrix.os }}
+  #         path: wheelhouse/
+
+  # -------------------------------------------------------------------------
+  # Job 2: Publish to TestPyPI (runs on every tag push for validation)
+  # -------------------------------------------------------------------------
+  publish-testpypi:
+    name: Publish to TestPyPI
+    runs-on: ubuntu-latest
+    needs: build
+    if: startsWith(github.ref, 'refs/tags/v')
+
+    environment:
+      name: testpypi
+      url: https://test.pypi.org/p/bartorch
+
+    permissions:
+      id-token: write   # required for OIDC trusted publishing
+
+    steps:
+      - name: Download distribution artifacts
+        uses: actions/download-artifact@v4
+        with:
+          name: python-package-distributions
+          path: dist/
+
+      - name: Publish to TestPyPI
+        uses: pypa/gh-action-pypi-publish@release/v1
+        with:
+          repository-url: https://upload.test.pypi.org/legacy/
+
+  # -------------------------------------------------------------------------
+  # Job 3: Publish to PyPI (only after TestPyPI succeeds; requires approval)
+  # -------------------------------------------------------------------------
+  publish-pypi:
+    name: Publish to PyPI
+    runs-on: ubuntu-latest
+    needs: publish-testpypi
+    if: startsWith(github.ref, 'refs/tags/v')
+
+    environment:
+      name: pypi
+      url: https://pypi.org/p/bartorch
+
+    permissions:
+      id-token: write   # required for OIDC trusted publishing
+
+    steps:
+      - name: Download distribution artifacts
+        uses: actions/download-artifact@v4
+        with:
+          name: python-package-distributions
+          path: dist/
+
+      - name: Publish to PyPI
+        uses: pypa/gh-action-pypi-publish@release/v1
+
+  # -------------------------------------------------------------------------
+  # Job 4: Create a GitHub Release with the distribution files attached
+  # -------------------------------------------------------------------------
+  github-release:
+    name: Create GitHub Release
+    runs-on: ubuntu-latest
+    needs: publish-pypi
+    if: startsWith(github.ref, 'refs/tags/v')
+
+    permissions:
+      contents: write
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Download distribution artifacts
+        uses: actions/download-artifact@v4
+        with:
+          name: python-package-distributions
+          path: dist/
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: dist/*
+          generate_release_notes: true

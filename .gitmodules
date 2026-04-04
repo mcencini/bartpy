@@ -1,3 +1,5 @@
 [submodule "bart"]
 	path = bart
+	# Canonical upstream: https://codeberg.org/mrirecon/bart.git
+	# GitHub mirror used here for CI/CD accessibility:
 	url = https://github.com/mrirecon/bart.git

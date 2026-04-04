@@ -1,103 +1,95 @@
 # Copyright 2021. The Regents of the University of California.
-# All rights reserved. Use of this source code is governed by 
+# All rights reserved. Use of this source code is governed by
 # a BSD-style license which can be found in the LICENSE file.
 #
-# Authors: 
+# Authors:
 # 2021 Max Litster <litster@berkeley.edu>
-
-
-from distutils.core import setup, Extension
-import os
-import re
-import sys
-
-import numpy as np
-
-from build_tools.utils import write_tool_methods
-
-#os.environ['CC'] = 'gcc-mp-6'
-
-BART_PATH = os.environ['TOOLBOX_PATH']
-
-omp = 'gomp'
-if sys.platform == 'darwin':
-       omp = 'omp'
-
-#simu = Extension('_simu_swig',
-#                     extra_compile_args=['-fopenmp'],
-#                     extra_link_args=[f'-l{omp}'],
-#                     include_dirs=[f'{BART_PATH}/src/', '/opt/local/include/', '/opt/local/lib/',
-#                                   np.get_include()],
-#                     sources=[f'{BART_PATH}/src/simu/phantom.c',
-#                            'bartpy/simu/simu_wrap.c'],
-#                     libraries=['box', 'calib', 'dfwavelet', 'geom',
-#                                   'grecon', 'iter', 'linops', 'lowrank', 
-#                                   'misc', 'moba', 'nlops', 'noir', 'noncart',
-#                                   'num', 'sake', 'sense', 'simu', 'wavelet',
-#                                   'openblas', 'fftw3f', 'fftw3', 'fftw3f_threads',],
-#                     library_dirs=[f'{BART_PATH}/lib/', '/opt/local/include/', '/opt/local/lib/'],
-#                     )
-
-#fft = Extension('_fft_swig',
-#                     extra_compile_args=['-fopenmp'],
-#                     extra_link_args=[f'-l{omp}'],
-#                     include_dirs=[f'{BART_PATH}/src/', '/opt/local/include/', '/opt/local/lib/',
-#                                   np.get_include()],
-#                     sources=[f'{BART_PATH}/src/num/fft.c',
-#                            'bartpy/num/fft_wrap.c'],
-#                     libraries=['box', 'calib', 'dfwavelet', 'geom',
-#                                   'grecon', 'iter', 'linops', 'lowrank', 
-#                                   'misc', 'moba', 'nlops', 'noir', 'noncart',
-#                                   'num', 'sake', 'sense', 'simu', 'wavelet',
-#                                   'openblas', 'fftw3f', 'fftw3', 'fftw3f_threads',],
-#                     library_dirs=[f'{BART_PATH}/lib/', '/opt/local/include/', '/opt/local/lib/'],
-#                     )
+# 2024 bartorch contributors
 #
-#linops = Extension('_linop_swig',
-#                     extra_compile_args=['-fopenmp'],
-#                     extra_link_args=[f'-l{omp}'],
-#                     include_dirs=[f'{BART_PATH}/src/', '/opt/local/include/', '/opt/local/lib/',
-#                                   np.get_include()],
-#                     sources=[f'{BART_PATH}/src/linops/someops.c', f'{BART_PATH}/src/linops/linop.c',
-#                            'bartpy/linops/linop_wrap.c'],
-#                     libraries=['box', 'calib', 'dfwavelet', 'geom',
-#                                   'grecon', 'iter', 'linops', 'lowrank', 
-#                                   'misc', 'moba', 'nlops', 'noir', 'noncart',
-#                                   'num', 'sake', 'sense', 'simu', 'wavelet',
-#                                   'openblas', 'fftw3f', 'fftw3', 'fftw3f_threads',],
-#                     library_dirs=[f'{BART_PATH}/lib/', '/opt/local/include/', '/opt/local/lib/'],)
+# This file now serves as the CMake-based build entry point for the
+# _bartorch_ext C++ extension (PyTorch ↔ BART zero-copy bridge).
+#
+# Legacy bartpy installation (subprocess-based wrappers) is still available;
+# see bartpy/ for the original package.
+#
+# Usage
+# -----
+#   CPU-only:
+#       pip install -e .
+#
+#   With CUDA:
+#       CMAKE_ARGS="-DUSE_CUDA=ON" pip install -e .
+#
+#   Skip C++ extension (pure-Python / FIFO fallback only):
+#       BARTORCH_SKIP_EXT=1 pip install -e .
 
-#iter_module = Extension('_italgos',
-#                     extra_compile_args=['-fopenmp'],
-#                     extra_link_args=[f'-l{omp}'],
-#                     include_dirs=[f'{BART_PATH}/src/', '/opt/local/include/', '/opt/local/lib/',
-#                                   np.get_include()],
-#                     sources=[f'{BART_PATH}/src/iter/italgos.c', 'bartpy/italgos/iter_wrap.c'],
-#                     libraries=['box', 'calib', 'dfwavelet', 'geom',
-#                                   'grecon', 'iter', 'linops', 'lowrank', 
-#                                   'misc', 'moba', 'nlops', 'noir', 'noncart',
-#                                   'num', 'sake', 'sense', 'simu', 'wavelet',
-#                                   'openblas', 'fftw3f', 'fftw3', 'fftw3f_threads',],
-#                     library_dirs=[f'{BART_PATH}/lib/', '/opt/local/include/', '/opt/local/lib/'],)
+import os
+import subprocess
+import sys
+from pathlib import Path
 
-print('[INFO] Writing Tool Methods')
-write_tool_methods()
-print('[INFO] Complete')
-print('[INFO] Installing Library')
+from setuptools import setup, Extension
+from setuptools.command.build_ext import build_ext
+
+
+class CMakeExtension(Extension):
+    def __init__(self, name: str, src_dir: str = ""):
+        super().__init__(name, sources=[])
+        self.src_dir = Path(src_dir).resolve()
+
+
+class CMakeBuild(build_ext):
+    def build_extension(self, ext: CMakeExtension) -> None:
+        if os.environ.get("BARTORCH_SKIP_EXT") == "1":
+            return
+
+        ext_dir = Path(self.get_ext_fullpath(ext.name)).parent.resolve()
+        build_temp = Path(self.build_temp) / ext.name
+        build_temp.mkdir(parents=True, exist_ok=True)
+
+        import torch
+        torch_cmake_prefix = torch.utils.cmake_prefix_path
+
+        cmake_args = [
+            f"-DCMAKE_LIBRARY_OUTPUT_DIRECTORY={ext_dir}",
+            f"-DPYTHON_EXECUTABLE={sys.executable}",
+            f"-DCMAKE_PREFIX_PATH={torch_cmake_prefix}",
+            "-DCMAKE_BUILD_TYPE=Release",
+        ]
+
+        extra = os.environ.get("CMAKE_ARGS", "")
+        if extra:
+            cmake_args += extra.split()
+
+        build_args = ["--config", "Release", "--", "-j4"]
+
+        subprocess.check_call(
+            ["cmake", str(ext.src_dir)] + cmake_args,
+            cwd=build_temp,
+        )
+        subprocess.check_call(
+            ["cmake", "--build", "."] + build_args,
+            cwd=build_temp,
+        )
+
+
 setup(
-    name="bartpy",
-    version="1.0",
+    name="bartorch",
+    version="0.1.0.dev0",
     author="mrirecon",
-    author_email="mrirecon@lists.eecs.berkeley.edu",
-    description="Python interface for BART: the Berkeley Advanced Reconstruction Toolbox",
-    url="https://github.com/malits/bart-swig",
-    classifiers=[
-        "Programming Language :: Python :: 3",
-        "License",
-        "Operating System :: OS X",
-        "Operating System :: Linux"
+    description=(
+        "PyTorch-native interface to the Berkeley Advanced Reconstruction "
+        "Toolbox (BART)"
+    ),
+    packages=["bartorch", "bartorch.core", "bartorch.ops",
+              "bartorch.pipe", "bartorch.tools", "bartorch.utils",
+              # Legacy
+              "bartpy", "bartpy.utils", "bartpy.tools", "bartpy.wrapper"],
+    ext_modules=[
+        CMakeExtension("_bartorch_ext", src_dir="bartorch/csrc"),
     ],
-    ext_modules = [],
-    package_dir = {},
-    packages = ["bartpy", "bartpy.utils", "bartpy.tools", "bartpy.wrapper"],
+    cmdclass={"build_ext": CMakeBuild},
+    python_requires=">=3.9",
+    install_requires=["torch>=2.0", "numpy>=1.21"],
+    zip_safe=False,
 )

@@ -3,11 +3,25 @@ __pycache__
 build/
 dist/
 bartpy.egg-info/
+bartorch.egg-info/
 .vscode/
 
 demos/.ipynb_checkpoints/*
 
+# Compiled extensions
 *.so
+*.pyd
 
+# CFL data files
 *.cfl
 *.hdr
+
+# CMake build artifacts
+bartorch/csrc/build/
+CMakeCache.txt
+CMakeFiles/
+cmake_install.cmake
+Makefile
+
+# Bartorch generated tools
+bartorch/tools/_generated.py

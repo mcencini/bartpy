@@ -64,6 +64,22 @@ jobs:
   # -------------------------------------------------------------------------
   # (Optional) Job 1b: Build binary wheels with cibuildwheel
   # Uncomment once the C++ extension build is stable.
+  #
+  # How PyTorch's bundled BLAS / FFT are used
+  # ------------------------------------------
+  # setup.py passes -DCMAKE_PREFIX_PATH=$(python -c "import torch;
+  # print(torch.utils.cmake_prefix_path)") to CMake.  CMakeLists.txt calls
+  # find_package(Torch REQUIRED), which sets TORCH_LIBRARIES to PyTorch's
+  # bundled MKL/OpenBLAS + cuFFT/FFTW objects.  BART's static lib is then
+  # linked with:
+  #
+  #   target_link_libraries(bart_static PUBLIC ${TORCH_LIBRARIES})
+  #
+  # so the compiled extension always resolves BLAS/FFT from the same PyTorch
+  # wheel that the user installed — no separate FFTW or OpenBLAS is vendored.
+  #
+  # The critical step is CIBW_BEFORE_BUILD: it must install PyTorch *before*
+  # cmake runs so that setup.py can resolve torch.utils.cmake_prefix_path.
   # -------------------------------------------------------------------------
   # build-wheels:
   #   name: Build binary wheels (${{ matrix.os }})
@@ -79,6 +95,16 @@ jobs:
   #       env:
   #         CIBW_BUILD: "cp310-* cp311-* cp312-*"
   #         CIBW_SKIP: "*-musllinux_*"
+  #         # Install PyTorch before the CMake configure step so that
+  #         # setup.py can call torch.utils.cmake_prefix_path and
+  #         # CMake's find_package(Torch) resolves ${TORCH_LIBRARIES}
+  #         # (PyTorch's bundled MKL/OpenBLAS + FFTW/cuFFT).
+  #         # Without this step the build would fail with "No module named torch".
+  #         CIBW_BEFORE_BUILD: pip install "torch>=2.0" --index-url https://download.pytorch.org/whl/cpu
+  #         # Pass extra CMake flags through setup.py's CMAKE_ARGS env var.
+  #         # -DUSE_CUDA=OFF  → CPU-only wheel (CUDA wheels need a separate
+  #         #                    matrix row with CIBW_BEFORE_BUILD installing
+  #         #                    torch from the cuda* index URL).
   #         CIBW_ENVIRONMENT: "CMAKE_ARGS='-DUSE_CUDA=OFF'"
   #     - uses: actions/upload-artifact@v4
   #       with:

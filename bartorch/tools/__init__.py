@@ -18,19 +18,9 @@ Example: ``bt.fft(x, axes=(-1, -2))`` — 2-D FFT over the last two axes.
 
 Named tools
 -----------
-.. autosummary::
-
-   fft
-   ifft
-   phantom
-   ecalib
-   caldir
-   pics
-   conjgrad
-   ist
-   fista
-   irgnm
-   chambolle_pock
+The following tools are explicitly wrapped with Pythonic APIs:
+``fft``, ``ifft``, ``phantom``, ``ecalib``, ``caldir``, ``pics``,
+``conjgrad``, ``ist``, ``fista``, ``irgnm``, ``chambolle_pock``.
 
 Generic access
 --------------

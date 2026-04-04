@@ -84,12 +84,12 @@ def axes_to_flags(
         axes = tuple(axes)
 
     normalised: list[int] = []
-    for a in axes:
-        if a < 0:
-            a = a + ndim
+    for orig in axes:
+        a = orig + ndim if orig < 0 else orig
         if a < 0 or a >= ndim:
             raise ValueError(
-                f"axis index out of range: original value out of [-{ndim}, {ndim - 1}]"
+                f"axis {orig} out of range for ndim={ndim} "
+                f"(valid range: [{-ndim}, {ndim - 1}])"
             )
         normalised.append(a)
 

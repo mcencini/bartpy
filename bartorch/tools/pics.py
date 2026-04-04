@@ -251,6 +251,12 @@ def pics(
 
     >>> reco = bt.pics(kspace, sens, R="T:7:0:0.01", l2=True, lambda_=1e-4, admm=True)
 
+    Multiple regularisers — use ``**extra_flags`` with any BART flag name.
+    BART allows repeated ``-R`` specifications; pass them as differently-named
+    extra kwargs and note that the C++ layer receives them as separate flags:
+
+    >>> reco = bt.pics(kspace, sens, R="W:7:0:0.005", **{"R ": "T:7:0:0.002"})
+
     Pass arbitrary BART flags directly:
 
     >>> reco = bt.pics(kspace, sens, R="L:7:7:0.01", N=True, u=True)

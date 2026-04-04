@@ -173,7 +173,7 @@ def _generate(out_path: Path, tools: list[str]) -> None:
     for name in sorted(tools):
         if name in _SKIP_TOOLS:
             continue
-        # Sanitise: BART tool names are lowercase alphanumeric + underscore.
+        # Sanitise: replace hyphens; BART tool names use lowercase alphanumeric and hyphens only.
         safe = name.replace("-", "_")
         lines.append(f"{safe} = make_tool({name!r})")
         exported.append(safe)

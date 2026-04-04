@@ -67,12 +67,11 @@ def call_bart(
 
 
 def make_tool(name: str):
-    """Return a thin wrapper function for BART tool *name*.
+    """Return a minimal generic wrapper function for BART tool *name*.
 
-    The wrapper normalises inputs via :func:`call_bart` and forwards all
-    keyword arguments as BART flags.  It is intended for use by
-    ``build_tools/gen_tools.py`` to auto-generate wrappers for every BART
-    CLI command.
+    This is the **fallback** used by ``build_tools/gen_tools.py`` when BART
+    source is unavailable.  The richer, source-parsed variant is used by
+    default — see ``gen_tools.py`` for details.
 
     Parameters
     ----------

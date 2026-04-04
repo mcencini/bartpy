@@ -13,7 +13,7 @@ for MRI reconstruction.
 | **CUDA support** | GPU tensor device pointers are registered directly; BART's vptr system routes to CUDA kernels automatically |
 | **Full PyTorch citizen** | All ops accept/return plain `torch.Tensor`; participates in autograd, `torch.compile`, and CUDA streams |
 | **Thin wheel** | Links against PyTorch's bundled BLAS/FFT (MKL or OpenBLAS + cuFFT) — no duplicate libraries shipped |
-| **Full CLI access** | Every BART command is available via `bartorch.tools`; `build_tools/gen_tools.py` generates wrappers for all 100+ tools at build time |
+| **Full CLI access** | Every BART command available via `bartorch.tools` with auto-generated, properly-typed Python functions parsed from BART source |
 
 ## Requirements
 
@@ -84,17 +84,26 @@ bt.fft(x, axes=0)           # first axis
 
 ## Full CLI access
 
-Every BART command is accessible via `bartorch.tools.call_bart` or via
-auto-generated named wrappers in `bartorch.tools._generated` (produced at
-build time by `build_tools/gen_tools.py`):
+Every BART command is available in `bartorch.tools` as a properly-typed Python
+function. `build_tools/gen_tools.py` parses the **BART C source files**
+(`bart/src/`) — no system `bart` binary required — and generates
+`bartorch/tools/_generated.py` with one function per tool.
+
+Each generated function has:
+- Named keyword arguments with Python type hints, inferred from BART's
+  `OPT_*` macros (e.g. `a: bool = False`, `m: int | None = None`)
+- A NumPy-style docstring generated from BART's help string and option descriptions
+- `**extra_flags` to forward any unlisted flags directly
 
 ```python
 import bartorch.tools as bt
 
-# Named wrappers
-result = bt.pics(kspace, sens, R="T:7:0:0.01")   # total variation
+# Named wrappers with type hints and docstrings
+result = bt.pics(kspace, sens, R="T:7:0:0.01")       # total variation PICS
+kspace = bt.nufft(traj, kspace_data, a=True)          # adjoint NUFFT
+rss    = bt.rss(kspace, bitmask=3)                    # root-sum-of-squares
 
-# Generic entry point — any BART command
+# Generic entry point — any BART command by name
 result = bt.call_bart("nufft", traj, kspace, output_dims=[nx, ny])
 
 # Regenerate wrappers after updating the BART submodule

@@ -193,28 +193,55 @@ bt.pics(kspace, sens,
         gpu=True)
 ```
 
-### 4.5 Trivial CLI suite exposure
+### 4.5 Auto-generated CLI wrapper suite
 
 `build_tools/gen_tools.py` generates `bartorch/tools/_generated.py` at build
-time.  Each line creates a thin wrapper via `make_tool()`:
+time by **parsing the BART C source files** in the `bart/src/` submodule.  It
+never calls a system `bart` binary.
+
+For each tool it:
+
+1. Extracts the tool description from `static const char help_str[]`.
+2. Reads `struct arg_s args[]` to identify CFL tensor inputs and positional
+   plain-value arguments.
+3. Reads `const struct opt_s opts[]` to produce named keyword arguments with
+   accurate Python type hints and option descriptions.
+
+Each generated function looks like:
 
 ```python
-nufft = make_tool("nufft")
-walsh = make_tool("walsh")
-# ...
+@bart_op
+def nufft(
+    traj: torch.Tensor,
+    input_: torch.Tensor,
+    *,
+    output_dims: list[int] | None = None,
+    a: bool = False,         # adjoint
+    i: bool = False,         # inverse
+    x: tuple[int, int, int] | None = None,   # output dims x:y:z
+    l: float | None = None,  # l2 regularisation
+    m: int | None = None,    # max CG iterations
+    **extra_flags: Any,
+) -> torch.Tensor:
+    """Perform non-uniform Fast Fourier Transform. ...
+    ...
+    """
+    return dispatch("nufft", [traj, input_], output_dims,
+                    a=a or None, i=i or None, x=x, l=l, m=m,
+                    **extra_flags)
 ```
 
-`make_tool(name)` returns a function with signature
-`(*inputs, output_dims=None, **flags)` that calls `call_bart(name, ...)`.
-
-To regenerate after a BART update:
+To regenerate after a BART submodule update:
 
 ```bash
 python build_tools/gen_tools.py
+# Optional: specify paths explicitly
+python build_tools/gen_tools.py --bart-src bart/src --out bartorch/tools/_generated.py
 ```
 
-The script queries `bart --list` when `bart` is on `$PATH`, falling back to a
-built-in list of known BART v1.0.00 tools.
+If `bart/src/` is absent (submodule not initialised), the script falls back
+to a built-in list and generates minimal stubs.  Stubs are always a valid
+`bartorch.tools` API even without a full parse.
 
 ### 4.6 BartContext (thread-local session)
 

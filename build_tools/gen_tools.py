@@ -1,134 +1,52 @@
 """build_tools/gen_tools.py — Generate bartorch/tools/_generated.py.
 
-Run this script at build time (or manually) to produce thin wrappers for
-every BART CLI command.  The generated module is imported lazily by
-``bartorch/tools/__init__.py``.
+Parses BART source C files (``bart/src/<tool>.c`` in the git submodule) to
+extract each tool's positional arguments, named options, and description.
+Produces a ``bartorch/tools/_generated.py`` with one properly typed Python
+function per BART command.
+
+The generated functions:
+
+* Have named keyword arguments matching every BART ``-flag`` option.
+* Carry Python type hints inferred from BART's opt-type macros.
+* Include a NumPy-style docstring generated from BART's ``help_str`` and the
+  option descriptions extracted from source.
+* Are decorated with ``@bart_op`` so tensor inputs are normalised to
+  ``complex64`` automatically.
+* Accept ``**extra_flags`` for any BART option not covered by a named param.
 
 Usage
 -----
 From the repository root::
 
-    python build_tools/gen_tools.py
+    python build_tools/gen_tools.py [--bart-src PATH] [--out PATH]
 
-Requirements
-------------
-A ``bart`` binary must be on ``$PATH``, **or** the C++ extension
-``_bartorch_ext`` must be importable so that ``bart_command("--list", ...)``
-can be called in-process.
+``--bart-src`` defaults to ``bart/src`` relative to the repository root.
+``--out`` defaults to ``bartorch/tools/_generated.py``.
 
-If neither is available the script falls back to the built-in tool list
-defined in ``_KNOWN_TOOLS`` and generates stubs for those.
+If ``bart/src`` is absent (submodule not initialised), the script falls back
+to a built-in minimal list and generates generic stubs.
 
 Generated file
 --------------
-``bartorch/tools/_generated.py`` — one ``make_tool()``-based wrapper per
-BART command.  The file is **gitignored** and should be regenerated whenever
-the BART submodule is updated.
+``bartorch/tools/_generated.py`` is **gitignored** and should be regenerated
+whenever the BART submodule is updated.
 """
 
 from __future__ import annotations
 
+import argparse
+import keyword
 import os
-import subprocess
+import re
 import sys
+import textwrap
 from pathlib import Path
 
 # ---------------------------------------------------------------------------
-# Fallback list of known BART tools (BART v1.0.00)
+# Tools with hand-written richer Python wrappers — skip in generated file
 # ---------------------------------------------------------------------------
 
-_KNOWN_TOOLS: list[str] = [
-    "bitmask",
-    "cabs",
-    "caldir",
-    "calib",
-    "caltraj",
-    "cc",
-    "ccapply",
-    "conv",
-    "conj",
-    "copy",
-    "cpyphs",
-    "creal",
-    "crop",
-    "delta",
-    "ecalib",
-    "ecaltwo",
-    "estdelay",
-    "estdims",
-    "estmat",
-    "estvar",
-    "extract",
-    "fft",
-    "fftmod",
-    "fftshift",
-    "filter",
-    "flatten",
-    "flip",
-    "fmac",
-    "homodyne",
-    "invert",
-    "itsense",
-    "join",
-    "looklocker",
-    "lrmatrix",
-    "mandelbrot",
-    "meanshape",
-    "moba",
-    "mobafit",
-    "morphop",
-    "multicfl",
-    "nlinv",
-    "noise",
-    "normalize",
-    "nrmse",
-    "nufft",
-    "nufftbase",
-    "onehotenc",
-    "pattern",
-    "phantom",
-    "pics",
-    "pocsense",
-    "poisson",
-    "poly",
-    "repmat",
-    "reshape",
-    "resize",
-    "rmfreq",
-    "rof",
-    "rss",
-    "sake",
-    "saxpy",
-    "scale",
-    "sdot",
-    "show",
-    "signal",
-    "slice",
-    "spow",
-    "squeeze",
-    "ssa",
-    "std",
-    "svd",
-    "tgv",
-    "threshold",
-    "toimg",
-    "traj",
-    "transpose",
-    "twixread",
-    "upat",
-    "version",
-    "walsh",
-    "wave",
-    "wavelet",
-    "wavepsf",
-    "whiten",
-    "window",
-    "zeros",
-    "zexp",
-]
-
-# Tools that are explicitly wrapped with richer Python APIs in bartorch.tools
-# and should not be overwritten by the auto-generated thin stubs.
 _SKIP_TOOLS: set[str] = {
     "ecalib",
     "caldir",
@@ -137,70 +55,520 @@ _SKIP_TOOLS: set[str] = {
     "pics",
 }
 
+# ---------------------------------------------------------------------------
+# BART OPT type → (Python annotation, default value string)
+# ---------------------------------------------------------------------------
 
-def _query_tool_list() -> list[str] | None:
-    """Return the list of BART tools by calling ``bart --list``.
+_OPT_TYPE_MAP: dict[str, tuple[str, str]] = {
+    "bool":      ("bool",                         "False"),
+    "INT":       ("int | None",                   "None"),
+    "UINT":      ("int | None",                   "None"),
+    "LONG":      ("int | None",                   "None"),
+    "ULONG":     ("int | None",                   "None"),
+    "ULLONG":    ("int | None",                   "None"),
+    "PINT":      ("int | None",                   "None"),
+    "FLOAT":     ("float | None",                 "None"),
+    "DOUBLE":    ("float | None",                 "None"),
+    "STRING":    ("str | None",                   "None"),
+    "INFILE":    ("str | None",                   "None"),
+    "OUTFILE":   ("str | None",                   "None"),
+    "INOUTFILE": ("str | None",                   "None"),
+    "VEC2":      ("tuple[int, int] | None",        "None"),
+    "VEC3":      ("tuple[int, int, int] | None",   "None"),
+    "VECN":      ("tuple[int, ...] | None",        "None"),
+    "FLVEC2":    ("tuple[float, float] | None",    "None"),
+    "FLVEC3":    ("tuple[float, float, float] | None", "None"),
+    "FLVEC4":    ("tuple[float, float, float, float] | None", "None"),
+    "FLVECN":    ("tuple[float, ...] | None",      "None"),
+}
 
-    Returns ``None`` if ``bart`` is not available.
+# ARG types that represent CFL / tensor inputs
+_TENSOR_ARG_TYPES: frozenset[str] = frozenset(
+    {"INFILE", "OUTFILE", "INOUTFILE", "CFL"}
+)
+
+# ARG types that represent plain-value positional args (not tensors)
+_VALUE_ARG_TYPE_MAP: dict[str, str] = {
+    "ULONG": "int",
+    "LONG":  "int",
+    "INT":   "int",
+    "UINT":  "int",
+    "FLOAT": "float",
+    "STRING": "str",
+    "VEC2":  "tuple[int, int]",
+    "VEC3":  "tuple[int, int, int]",
+}
+
+# Python keywords and common builtins that need renaming
+_PYTHON_RESERVED: frozenset[str] = frozenset(
+    set(keyword.kwlist)
+    | {"input", "type", "list", "dict", "set", "id", "map", "filter",
+       "min", "max", "sum", "len", "all", "any", "zip", "range", "help"}
+)
+
+
+# ---------------------------------------------------------------------------
+# Helpers
+# ---------------------------------------------------------------------------
+
+
+def _to_py_ident(s: str) -> str:
+    """Convert a raw string into a valid Python identifier.
+
+    Rules:
+    * Replace hyphens and dots with underscores.
+    * Remove any remaining non-alphanumeric/underscore characters.
+    * Prefix digit-starting names with ``flag_``.
+    * Append ``_`` to names that clash with Python keywords or common builtins.
     """
-    try:
-        result = subprocess.run(
-            ["bart", "--list"],
-            capture_output=True,
-            text=True,
-            timeout=10,
+    s = s.replace("-", "_").replace(".", "_").replace("/", "_per_")
+    s = re.sub(r"[^a-zA-Z0-9_]", "_", s)
+    if s and s[0].isdigit():
+        s = "flag_" + s
+    if s in _PYTHON_RESERVED:
+        s = s + "_"
+    return s
+
+
+def _strip_c_comments(text: str) -> str:
+    """Remove C block comments and C++ line comments."""
+    text = re.sub(r"/\*.*?\*/", " ", text, flags=re.DOTALL)
+    text = re.sub(r"//[^\n]*", " ", text)
+    return text
+
+
+# ---------------------------------------------------------------------------
+# BART C-source parser
+# ---------------------------------------------------------------------------
+
+
+def _parse_tool_source(tool_name: str, src_path: Path) -> dict:
+    """Extract description, positional args, and named opts from a BART ``.c`` file.
+
+    Returns a dict with keys:
+    * ``name`` — tool name (str)
+    * ``help`` — description (str, may be empty)
+    * ``tensor_inputs`` — list of ``(name,)`` for ARG_INFILE / ARG_INOUTFILE
+    * ``value_args``    — list of ``(py_type, name, description)`` for non-CFL
+                          positional args (ARG_ULONG, ARG_INT, …)
+    * ``opts``          — list of ``(py_type, py_key, orig_key, argname, descr)``
+    """
+    content = src_path.read_text(errors="replace")
+    code = _strip_c_comments(content)
+
+    def _clean_c_str(s: str) -> str:
+        """Clean a C string literal for use in a Python docstring."""
+        # Interpret common C escape sequences, then escape remaining backslashes
+        s = s.replace("\\n", " ").replace("\\t", " ")
+        # Escape remaining backslashes so they don't create invalid Python escapes
+        s = s.replace("\\", "\\\\")
+        return s.strip()
+
+    # 1. Description (help_str)
+    m = re.search(
+        r'static\s+const\s+char\s+help_str\[\]\s*=\s*"((?:[^"\\]|\\.)*?)"',
+        code, re.DOTALL,
+    )
+    help_str = _clean_c_str(m.group(1)) if m else ""
+
+    # 2. Positional args (struct arg_s args[] = { ... };)
+    args_m = re.search(
+        r"struct\s+arg_s\s+args\s*\[\s*\]\s*=\s*\{(.*?)\};",
+        code, re.DOTALL,
+    )
+    tensor_inputs: list[tuple[str]] = []
+    value_args: list[tuple[str, str, str]] = []
+    if args_m:
+        for m in re.finditer(
+            r"ARG_(\w+)\s*\(\s*(?:true|false)\s*,\s*[^,]+,\s*\"([^\"]+)\"",
+            args_m.group(1),
+        ):
+            kind, argname = m.group(1), m.group(2)
+            if kind in _TENSOR_ARG_TYPES:
+                if kind != "OUTFILE":          # ARG_OUTFILE is the output, not an input
+                    tensor_inputs.append((argname,))
+            elif kind in _VALUE_ARG_TYPE_MAP:
+                py_type = _VALUE_ARG_TYPE_MAP[kind]
+                value_args.append((py_type, _to_py_ident(argname), argname))
+
+    # 3. Named options (const struct opt_s opts[] = { ... };)
+    opts_m = re.search(
+        r"const\s+struct\s+opt_s\s+opts\s*\[\s*\]\s*=\s*\{(.*?)\};",
+        code, re.DOTALL,
+    )
+    opts: list[tuple[str, str, str, str, str]] = []
+    seen_keys: set[str] = set()
+
+    def _add_opt(py_type: str, raw_key: str, argname: str, descr: str) -> None:
+        key = _to_py_ident(raw_key)
+        if key in seen_keys or not key:
+            return
+        seen_keys.add(key)
+        opts.append((py_type, key, raw_key, argname, _clean_c_str(descr)))
+
+    if opts_m:
+        block = opts_m.group(1)
+
+        # OPT_SET / OPT_CLEAR  (char, ptr, descr)
+        for m in re.finditer(
+            r"OPT_(?:SET|CLEAR)\s*\(\s*'([^']+)'\s*,[^,]+,\s*\"([^\"]+)\"",
+            block,
+        ):
+            _add_opt("bool", m.group(1), "", m.group(2))
+
+        # OPT_<TYPE>  (char, ptr, argname, descr)
+        for m in re.finditer(
+            r"OPT_("
+            r"INT|UINT|LONG|ULONG|ULLONG|PINT|FLOAT|DOUBLE|"
+            r"STRING|INFILE|OUTFILE|INOUTFILE|"
+            r"VEC2|VEC3|VECN|FLVEC2|FLVEC3|FLVEC4|FLVECN"
+            r")\s*\(\s*'([^']+)'\s*,[^,]+,\s*\"([^\"]+)\"\s*,\s*\"([^\"]+)\"",
+            block,
+        ):
+            _add_opt(m.group(1), m.group(2), m.group(3), m.group(4))
+
+        # OPTL_SET / OPTL_CLEAR  (char_or_0, long_name, ptr, descr)
+        for m in re.finditer(
+            r"OPTL_(?:SET|CLEAR)\s*\(\s*(?:'([^']+)'|0)\s*,\s*\"([^\"]+)\"\s*,[^,]+,\s*\"([^\"]+)\"",
+            block,
+        ):
+            char = m.group(1) or ""
+            long_name = m.group(2)
+            raw_key = char if char else long_name
+            _add_opt("bool", raw_key, "", m.group(3))
+
+        # OPTL_<TYPE>  (char_or_0, long_name, ptr, argname, descr)
+        for m in re.finditer(
+            r"OPTL_("
+            r"INT|UINT|LONG|ULONG|ULLONG|PINT|FLOAT|DOUBLE|"
+            r"STRING|INFILE|OUTFILE|INOUTFILE|"
+            r"VEC2|VEC3|VECN|FLVEC2|FLVEC3|FLVEC4|FLVECN"
+            r")\s*\(\s*(?:'([^']+)'|0)\s*,\s*\"([^\"]+)\"\s*,[^,]+,\s*\"([^\"]+)\"\s*,\s*\"([^\"]+)\"",
+            block,
+        ):
+            char = m.group(2) or ""
+            long_name = m.group(3)
+            raw_key = char if char else long_name
+            _add_opt(m.group(1), raw_key, m.group(4), m.group(5))
+
+    return {
+        "name": tool_name,
+        "help": help_str,
+        "tensor_inputs": tensor_inputs,
+        "value_args": value_args,
+        "opts": opts,
+    }
+
+
+def _discover_tools(bart_src: Path) -> list[str]:
+    """Return sorted list of BART tool names from ``main_<name>`` functions."""
+    tools: list[str] = []
+    if not bart_src.is_dir():
+        return tools
+    for path in sorted(bart_src.glob("*.c")):
+        content = path.read_text(errors="replace")
+        m = re.search(r"^int main_(\w+)", content, re.MULTILINE)
+        if m:
+            tools.append(m.group(1))
+    return sorted(tools)
+
+
+# ---------------------------------------------------------------------------
+# Code generation
+# ---------------------------------------------------------------------------
+
+
+def _opt_type_hint(py_type: str) -> str:
+    return _OPT_TYPE_MAP.get(py_type, ("Any", "None"))[0]
+
+
+def _opt_default(py_type: str) -> str:
+    return _OPT_TYPE_MAP.get(py_type, ("Any", "None"))[1]
+
+
+def _generate_func(info: dict) -> str:
+    """Return the Python source for one generated function."""
+    name = info["name"]
+    safe_name = name.replace("-", "_")
+    tensor_inputs = info["tensor_inputs"]   # [(argname,), ...]
+    value_args = info["value_args"]         # [(py_type, py_key, orig_name), ...]
+    opts = info["opts"]                     # [(py_type, py_key, orig_key, argname, descr), ...]
+    help_str = info["help"]
+
+    lines: list[str] = []
+
+    # ---- decorator ----
+    lines.append("@bart_op")
+
+    # ---- signature ----
+    sig_lines: list[str] = [f"def {safe_name}("]
+
+    # positional tensor inputs
+    for (argname,) in tensor_inputs:
+        py_param = _to_py_ident(argname)
+        sig_lines.append(f"    {py_param}: torch.Tensor,")
+
+    # positional non-tensor args
+    for py_type, py_key, _orig in value_args:
+        sig_lines.append(f"    {py_key}: {py_type},")
+
+    # keyword-only separator
+    sig_lines.append("    *,")
+    sig_lines.append("    output_dims: list[int] | None = None,")
+
+    # named opt kwargs
+    for py_type, py_key, _orig_key, _argname, _descr in opts:
+        type_hint = _opt_type_hint(py_type)
+        default = _opt_default(py_type)
+        sig_lines.append(f"    {py_key}: {type_hint} = {default},")
+
+    sig_lines.append("    **extra_flags: Any,")
+    sig_lines.append(") -> torch.Tensor | tuple[torch.Tensor, ...]:")
+
+    lines.extend(sig_lines)
+
+    # ---- docstring ----
+    doc_lines: list[str] = ['    """']
+    if help_str:
+        # Wrap long descriptions at 76 chars
+        wrapped = textwrap.fill(help_str.rstrip(".") + ".", width=76,
+                                subsequent_indent="    ")
+        doc_lines.append("    " + wrapped.lstrip())
+    else:
+        doc_lines.append(f"    Wraps BART's ``{name}`` command.")
+    doc_lines.append("")
+    doc_lines.append(f"    Equivalent to calling ``bart {name}`` with the given arguments.")
+    doc_lines.append(f"    See the BART documentation for full details.")
+    doc_lines.append("")
+    doc_lines.append("    Parameters")
+    doc_lines.append("    ----------")
+
+    for (argname,) in tensor_inputs:
+        py_param = _to_py_ident(argname)
+        doc_lines.append(f"    {py_param} : torch.Tensor")
+        doc_lines.append(f"        Input CFL array ``{argname}``.")
+
+    for py_type, py_key, orig_name in value_args:
+        doc_lines.append(f"    {py_key} : {py_type}")
+        doc_lines.append(f"        Positional argument ``{orig_name}``.")
+
+    doc_lines.append("    output_dims : list[int], optional")
+    doc_lines.append("        Expected output shape; ``None`` to infer at runtime.")
+
+    for py_type, py_key, orig_key, argname, descr in opts:
+        type_hint = _opt_type_hint(py_type)
+        default = _opt_default(py_type)
+        flag_str = f"-{orig_key}" if len(orig_key) == 1 else f"--{orig_key}"
+        descr_clean = descr.strip().rstrip(".")
+        if argname:
+            flag_str += f" {argname}"
+        doc_lines.append(f"    {py_key} : {type_hint}")
+        wrapped_descr = textwrap.fill(
+            f"        BART flag ``{flag_str}``: {descr_clean}. "
+            f"Default ``{default}``.",
+            width=79, subsequent_indent="        ",
         )
-        if result.returncode == 0:
-            return [t.strip() for t in result.stdout.splitlines() if t.strip()]
-    except (FileNotFoundError, subprocess.TimeoutExpired):
-        pass
-    return None
+        doc_lines.append(wrapped_descr)
+
+    doc_lines.append("    **extra_flags : Any")
+    doc_lines.append(f"        Additional BART ``{name}`` flags forwarded directly.")
+    doc_lines.append("    ")
+    doc_lines.append("    Returns")
+    doc_lines.append("    -------")
+    doc_lines.append("    torch.Tensor")
+    doc_lines.append("        Result array in C-order ``complex64``.")
+    doc_lines.append('    """')
+
+    lines.extend(doc_lines)
+
+    # ---- body ----
+    tensor_arg_names = [_to_py_ident(a[0]) for a in tensor_inputs]
+    inputs_expr = "[" + ", ".join(tensor_arg_names) + "]"
+
+    # Build the explicit kwargs dict passed to dispatch.
+    # Bool opts: pass as `True` only when set (truthy check).
+    # Optional opts: pass through as-is (None is ignored by dispatch).
+    kw_parts: list[str] = []
+    for py_type, py_key, orig_key, _argname, _descr in opts:
+        if py_type == "bool":
+            kw_parts.append(f"{py_key}={py_key} or None")
+        else:
+            kw_parts.append(f"{py_key}={py_key}")
+
+    # Also include positional non-tensor args as kwargs so dispatch can
+    # place them in the correct argv position.
+    for _py_type, py_key, orig_name in value_args:
+        kw_parts.append(f"{py_key}={py_key}")
+
+    kw_str = ", ".join(kw_parts)
+    if kw_str:
+        body = (
+            f"    return dispatch({name!r}, {inputs_expr}, output_dims,\n"
+            f"                    {kw_str}, **extra_flags)"
+        )
+    else:
+        body = (
+            f"    return dispatch({name!r}, {inputs_expr}, output_dims,\n"
+            f"                    **extra_flags)"
+        )
+
+    lines.append(body)
+    lines.append("")
+
+    return "\n".join(lines)
 
 
-def _generate(out_path: Path, tools: list[str]) -> None:
-    """Write *out_path* with one ``make_tool()``-based wrapper per tool."""
-    lines: list[str] = [
-        '"""bartorch.tools._generated — Auto-generated BART CLI wrappers.',
-        "",
-        "Generated by ``build_tools/gen_tools.py``.  Do not edit by hand.",
-        '"""',
-        "",
-        "from bartorch.tools._dispatch import make_tool",
-        "",
-    ]
+def _generate_stub(name: str) -> str:
+    """Generate a minimal stub when source is unavailable."""
+    safe = name.replace("-", "_")
+    return (
+        f"@bart_op\n"
+        f"def {safe}(*inputs: torch.Tensor, output_dims: list[int] | None = None,\n"
+        f"           **extra_flags: Any) -> torch.Tensor | tuple[torch.Tensor, ...]:\n"
+        f'    """Wraps BART\'s ``{name}`` command.\n\n'
+        f"    Run ``bart {name} -h`` for full documentation.\n\n"
+        f"    Parameters\n"
+        f"    ----------\n"
+        f"    *inputs : torch.Tensor\n"
+        f"        Positional tensor inputs.\n"
+        f"    output_dims : list[int], optional\n"
+        f"        Expected output shape.\n"
+        f"    **extra_flags : Any\n"
+        f"        BART flags forwarded directly.\n\n"
+        f"    Returns\n"
+        f"    -------\n"
+        f"    torch.Tensor\n"
+        f'    """\n'
+        f"    return dispatch({name!r}, list(inputs), output_dims, **extra_flags)\n\n"
+    )
 
+
+def _generate_file(out_path: Path, bart_src: Path | None) -> None:
+    """Write *out_path* with one generated function per BART tool."""
+
+    if bart_src is not None and bart_src.is_dir():
+        tools = _discover_tools(bart_src)
+        have_source = True
+        print(f"Found {len(tools)} tools in {bart_src}")
+    else:
+        if bart_src is not None:
+            print(f"WARNING: bart/src not found at {bart_src}. Falling back to built-in list.")
+        else:
+            print("No bart/src path provided. Using built-in list.")
+        tools = _FALLBACK_TOOLS
+        have_source = False
+
+    # Filter out skipped tools (hand-written wrappers) and internal tools
+    _INTERNAL = {"bart", "bench", "version"}
+    emit_tools = [t for t in tools if t not in _SKIP_TOOLS and t not in _INTERNAL]
+
+    header = textwrap.dedent(
+        f'''\
+        """bartorch.tools._generated — Auto-generated BART CLI wrappers.
+
+        Generated by ``build_tools/gen_tools.py``.  Do not edit by hand.
+
+        Each function wraps one BART command.  All functions:
+        * Accept named keyword arguments matching each BART flag (with type hints).
+        * Are decorated with ``@bart_op`` for automatic ``complex64`` normalisation.
+        * Accept ``**extra_flags`` for flags not listed as named parameters.
+        * Return a plain ``complex64 torch.Tensor`` (or tuple) in C-order.
+
+        Source-based generation: {"yes (bart/src/ parsed)" if have_source else "no (fallback stubs)"}
+        """
+
+        from __future__ import annotations
+
+        from typing import Any
+
+        import torch
+
+        from bartorch.core.graph import dispatch
+        from bartorch.core.tensor import bart_op
+
+        '''
+    )
+
+    func_lines: list[str] = []
     exported: list[str] = []
-    for name in sorted(tools):
-        if name in _SKIP_TOOLS:
-            continue
-        # Sanitise: replace hyphens; BART tool names use lowercase alphanumeric and hyphens only.
-        safe = name.replace("-", "_")
-        lines.append(f"{safe} = make_tool({name!r})")
-        exported.append(safe)
 
-    lines.append("")
-    lines.append("__all__ = [")
+    for name in emit_tools:
+        safe_name = name.replace("-", "_")
+        exported.append(safe_name)
+
+        if have_source:
+            src_path = bart_src / (name + ".c")
+            if src_path.exists():
+                try:
+                    info = _parse_tool_source(name, src_path)
+                    func_lines.append(_generate_func(info))
+                    continue
+                except Exception as exc:
+                    print(f"  WARNING: parse error for {name}: {exc}; using stub.")
+
+        func_lines.append(_generate_stub(name))
+
+    all_lines = [header]
+    all_lines.extend(func_lines)
+    all_lines.append("__all__ = [")
     for e in exported:
-        lines.append(f"    {e!r},")
-    lines.append("]")
-    lines.append("")
+        all_lines.append(f"    {e!r},")
+    all_lines.append("]")
+    all_lines.append("")
 
-    out_path.write_text("\n".join(lines), encoding="utf-8")
+    out_path.write_text("\n".join(all_lines), encoding="utf-8")
     print(f"Generated {out_path} with {len(exported)} tool wrappers.")
 
 
-def main() -> int:
+# ---------------------------------------------------------------------------
+# Fallback tool list (used when bart/src/ is absent)
+# ---------------------------------------------------------------------------
+
+_FALLBACK_TOOLS: list[str] = [
+    "affinereg", "avg", "bitmask", "bloch", "cabs", "calc",
+    "caldir", "calmat", "carg", "casorati", "cc", "ccapply", "cdf97",
+    "circshift", "coils", "compress", "conj", "conv", "copy", "cpyphs",
+    "creal", "crop", "delta", "ecalib", "ecaltwo", "estdelay", "estdims",
+    "estmat", "estvar", "extract", "fft", "fftmod", "fftshift", "filter",
+    "flatten", "flip", "fmac", "homodyne", "invert", "itsense", "join",
+    "looklocker", "lrmatrix", "mandelbrot", "meanshape", "moba", "mobafit",
+    "morphop", "multicfl", "nlinv", "noise", "normalize", "nrmse", "nufft",
+    "nufftbase", "onehotenc", "pattern", "phantom", "pics", "pocsense",
+    "poisson", "poly", "repmat", "reshape", "resize", "rmfreq", "rof", "rss",
+    "sake", "saxpy", "scale", "sdot", "signal", "slice", "spow", "squeeze",
+    "ssa", "std", "svd", "tgv", "threshold", "traj", "transpose", "twixread",
+    "upat", "walsh", "wave", "wavelet", "wavepsf", "whiten", "window",
+    "zeros", "zexp",
+]
+
+
+# ---------------------------------------------------------------------------
+# Entry point
+# ---------------------------------------------------------------------------
+
+
+def main(argv: list[str] | None = None) -> int:
     repo_root = Path(__file__).resolve().parent.parent
-    out_path = repo_root / "bartorch" / "tools" / "_generated.py"
 
-    tools = _query_tool_list()
-    if tools:
-        print(f"Queried {len(tools)} tools from 'bart --list'.")
-    else:
-        print("'bart' not found on $PATH; using built-in tool list.")
-        tools = _KNOWN_TOOLS
+    parser = argparse.ArgumentParser(
+        description="Generate bartorch/tools/_generated.py from BART source."
+    )
+    parser.add_argument(
+        "--bart-src",
+        default=str(repo_root / "bart" / "src"),
+        help="Path to BART src/ directory (default: bart/src relative to repo root)",
+    )
+    parser.add_argument(
+        "--out",
+        default=str(repo_root / "bartorch" / "tools" / "_generated.py"),
+        help="Output path for _generated.py",
+    )
+    args = parser.parse_args(argv)
 
-    _generate(out_path, tools)
+    bart_src = Path(args.bart_src)
+    out_path = Path(args.out)
+
+    _generate_file(out_path, bart_src)
     return 0
 
 

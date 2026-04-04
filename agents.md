@@ -16,9 +16,11 @@ around three key properties:
 
 | Property | Description |
 |---|---|
-| **Zero-copy** | Tensor ↔ BART data exchange uses shared memory — no serialisation |
+| **Zero-copy** | `torch.Tensor` ↔ BART CFL reinterprets `data_ptr()` directly; no serialisation and no `BartTensor` subclass visible to users |
+| **C-order Python API** | Axes are reversed at the C++ boundary so users work in NumPy/PyTorch convention; the reversed dims are passed zero-copy to BART's Fortran-order CFL |
 | **DSL hot path** | Pure-bartorch call chains stay entirely in C, skipping Python↔C boundaries |
-| **Full PyTorch citizen** | Ops integrate with `torch.autograd`, `torch.compile`, CUDA streams, DDP |
+| **Linop algebra** | `BartLinop` supports `@`, `+`, `*`, `.H`, `.N` — composition and sum are built implicitly, not as separate public factories |
+| **Full PyTorch citizen** | Ops accept/return plain `torch.Tensor`; integrate with `torch.autograd`, `torch.compile`, CUDA streams, DDP |
 
 ---
 
@@ -109,24 +111,25 @@ bartpy/                           ← repository root
 │   ├── csrc/                     ← PyTorch C++ extension source
 │   │   ├── CMakeLists.txt
 │   │   ├── bartorch_ext.cpp      ← pybind11 module entry point
-│   │   ├── tensor_bridge.hpp     ← zero-copy Tensor↔CFL bridge (CPU)
-│   │   ├── bart_ops.cpp          ← named op implementations (fft, pics, …)
+│   │   ├── tensor_bridge.hpp     ← zero-copy torch.Tensor↔CFL bridge (axis reversal, no copy)
+│   │   ├── bart_ops.cpp          ← named op implementations (fft, nufft, pics, …)
 │   │   └── cuda/
-│   │       └── cuda_bridge.hpp   ← zero-copy Tensor↔CFL bridge (CUDA)
+│   │       └── cuda_bridge.hpp   ← zero-copy CUDA tensor↔CFL bridge
 │   │
 │   ├── core/                     ← Python-side core
 │   │   ├── __init__.py
-│   │   ├── tensor.py             ← BartTensor + factory helpers
 │   │   ├── context.py            ← BartContext (in-memory CFL session)
-│   │   └── graph.py              ← dispatch: hot path vs FIFO fallback
+│   │   └── graph.py              ← dispatch: hot path vs subprocess fallback
 │   │
-│   ├── ops/                      ← Public Python API (mirrors old SWIG layer)
+│   ├── ops/                      ← Public Python API
 │   │   ├── __init__.py
-│   │   ├── fft.py                ← fft(), ifft()
+│   │   ├── fft.py                ← fft(), ifft(), nufft()
 │   │   ├── phantom.py            ← phantom()
-│   │   ├── linops.py             ← BartLinop, identity, diag, chain, …
+│   │   ├── linops.py             ← BartLinop (with __matmul__, __add__, __call__)
+│   │   ├── encoding.py           ← sense_op(), nufft_op() (full forward encoding ops)
+│   │   ├── regularizers.py       ← wavelet_op(), tv_op(), llr_op(), lr_op()
 │   │   ├── pics.py               ← ecalib(), caldir(), pics()
-│   │   └── italgos.py            ← conjgrad(), ist(), fista(), irgnm(), …
+│   │   └── italgos.py            ← conjgrad(), ist(), fista(), irgnm(), chambolle_pock()
 │   │
 │   ├── pipe/                     ← Subprocess fallback (CFL temp files in /dev/shm)
 │   │   ├── __init__.py
@@ -167,39 +170,46 @@ bartpy/                           ← repository root
 
 ### 4.1 Concept
 
-When user code only composes `bartorch` objects and functions, the operations
-execute entirely inside C without returning to Python between calls:
+**The user-facing type is plain `torch.Tensor`.**  `BartTensor` is an
+implementation detail of the C++ extension and is **never** part of the public
+API.  The Python side works exclusively with standard PyTorch tensors.
 
-```
-Python call → BartContext → bart_command() → result in pre-allocated tensor
-```
+When user code calls a bartorch function the C++ extension:
+1. Temporarily reinterprets each tensor's `data_ptr()` as a BART CFL buffer
+   (zero copy — no intermediate `BartTensor` subclass visible to the user).
+2. Executes one or more consecutive `bart_command()` calls in C without
+   returning to Python between them (the hot path).
+3. Returns the result as a plain `torch.Tensor`.
 
-When mixed with standard Python packages, we fall back to the FIFO subprocess
-path (still no disk I/O) or the simplest possible copy+call.
+### 4.2 Axis Convention — C-order Python, reversed Fortran in C
 
-### 4.2 BartTensor
+BART internally uses Fortran (column-major) order.  The Python interface uses
+**C-order (row-major)** tensors and **reverses the axis names** at the
+boundary so that users work in the natural Python/NumPy/PyTorch convention.
 
-`BartTensor` is a `torch.Tensor` subclass:
-- dtype: `torch.complex64` (= C's `complex float`)
-- strides: Fortran (column-major) — matches BART's memory layout
-- carries a `_bart_name: str` — the `*.mem` handle in the CFL registry
+| BART C axis order (Fortran)     | bartorch Python axis order (C, reversed) |
+|---------------------------------|------------------------------------------|
+| `(read, phase1, phase2, coils)` | `(coils, phase2, phase1, read)`          |
+| `(samples, views, coils)`       | `(coils, views, samples)`                |
+| `(x, y, z)`                     | `(z, y, x)`                             |
 
-The subclass participates in `__torch_function__` so that:
-- `BartTensor` OP `BartTensor` → stays on hot path
-- `BartTensor` OP `torch.Tensor` → promotes `torch.Tensor` to `BartTensor` 
-  (copies if not already compatible), then hot path
-- Result of any bartorch op is a `BartTensor`
+The C++ bridge reverses the dimension array before calling
+`register_mem_cfl_non_managed()`.  Because the underlying memory layout of a
+C-order tensor read in reversed Fortran order is identical to a Fortran-order
+tensor in natural order, **no copy is made**.
+
+This convention mirrors PyTorch / NumPy conventions and simplifies downstream
+interoperability (e.g. `torch.fft`, `torchkbnufft`).
 
 ### 4.3 BartContext
 
-A thread-local session that holds the current CFL registry state.  Within a
-context, all registered `*.mem` names remain alive so that consecutive ops
-share the same backing memory.
+A thread-local session that batches consecutive `bart_command()` calls, keeping
+registered `*.mem` names alive across calls so that intermediate tensors are
+never re-registered.
 
 ```python
-with bart_context() as ctx:
-    # Both phantom() and fft() share the same in-memory CFL registry session.
-    # No re-registration overhead between ops.
+with bart_context():
+    # phantom() and fft() share the same in-memory CFL session — no re-registration.
     result = bt.fft(bt.phantom([256, 256]), flags=3)
 ```
 
@@ -208,37 +218,40 @@ Outside a context, each op creates and destroys its own mini-session.
 ### 4.4 Dispatch logic (`bartorch.core.graph`)
 
 ```
-dispatch(op_name, inputs, output_dims, **kwargs)
+dispatch(op_name, inputs, output_shape, **kwargs)
   │
-  ├─ All inputs are BartTensor AND C++ ext available?
+  ├─ C++ ext available?
   │   → Path A: hot path via _bartorch_ext.run()
-  │
-  ├─ Some inputs are plain torch.Tensor / ndarray AND C++ ext available?
-  │   → Promote to BartTensor (copy) → Path A
+  │       * accepts any torch.Tensor (C-order, complex64)
+  │       * registers data_ptr() zero-copy; reverses dims for BART
+  │       * returns plain torch.Tensor (C-order)
   │
   └─ C++ ext not available?
-      → Path B: FIFO subprocess via bartorch.pipe.run_fifo()
+      → Path B: CFL temp files in /dev/shm via bartorch.pipe.run_subprocess()
 ```
 
 ### 4.5 Hot-path execution flow (C++ extension)
 
 ```
-1.  For each input tensor:
-      register_mem_cfl_non_managed("_bt_<uuid>.mem", D, dims, tensor.data_ptr())
+1.  For each input torch.Tensor (C-order, complex64):
+      reversed_dims = reverse(tensor.shape)      # C→Fortran axis reorder
+      register_mem_cfl_non_managed("_bt_<uuid>.mem", D, reversed_dims, tensor.data_ptr())
+      # BART sees Fortran-order CFL — no data copy
 
-2.  Allocate output tensor(s):
-      torch::Tensor out = make_bart_tensor(output_dims, device)
-      register_mem_cfl_non_managed("_bt_<uuid>_out.mem", D, out_dims, out.data_ptr())
+2.  Allocate output tensor (C-order):
+      torch::Tensor out = torch::zeros(output_shape, complex64)
+      reversed_out_dims = reverse(output_shape)
+      register_mem_cfl_non_managed("_bt_<uuid>_out.mem", D, reversed_out_dims, out.data_ptr())
 
 3.  Build argv:  ["fft", "-u", "3", "_bt_xxx.mem", "_bt_yyy_out.mem"]
 
 4.  bart_command(0, nullptr, argc, argv)
-      → BART reads from _bt_xxx.mem (= tensor.data_ptr(), zero copy)
-      → BART writes to _bt_yyy_out.mem (= out.data_ptr(), zero copy)
+      → BART reads from _bt_xxx.mem  (zero copy, correct Fortran layout)
+      → BART writes to _bt_yyy_out.mem (zero copy)
 
 5.  memcfl_unlink("_bt_xxx.mem"), memcfl_unlink("_bt_yyy_out.mem")
 
-6.  return BartTensor(out)
+6.  return out   # plain torch.Tensor, C-order, as seen by user
 ```
 
 ---
@@ -367,21 +380,106 @@ Adds:
 
 ---
 
-## 7. Op Coverage — Mapping from Old bartpy SWIG Interface
+## 7. Public API Design
 
-The following table maps each old SWIG-wrapped module to its new bartorch
-equivalent.  All ops route through the same hot-path or FIFO dispatcher.
+### 7.1 User-facing type: plain `torch.Tensor`
+
+All public bartorch functions accept and return plain `torch.Tensor` objects
+(`dtype=torch.complex64`).  The C-order ↔ Fortran axis reversal is handled
+transparently inside the C++ extension.  Users never see `BartTensor` or
+Fortran-strided tensors.
+
+### 7.2 `BartLinop` — operator class with magic methods
+
+`BartLinop` is the public Python class representing a bounded linear operator
+wrapping BART's `struct linop_s*`.  It exposes an interface familiar to
+PyTorch / NumPy users:
+
+```python
+class BartLinop:
+    # Forward application: A(x) or A @ x
+    def __call__(self, x: Tensor) -> Tensor: ...
+    def __matmul__(self, x: Tensor) -> Tensor: ...   # A @ x
+
+    # Adjoint application: A.H @ x
+    @property
+    def H(self) -> "BartLinop": ...                  # adjoint operator
+
+    # Composition:  (A @ B)(x) = A(B(x))
+    def __matmul__(self, other: "BartLinop") -> "BartLinop": ...
+
+    # Sum: (A + B)(x) = A(x) + B(x)
+    def __add__(self, other: "BartLinop") -> "BartLinop": ...
+
+    # Scalar scaling: (2 * A)(x) = 2 * A(x)
+    def __mul__(self, scalar: float) -> "BartLinop": ...
+    def __rmul__(self, scalar: float) -> "BartLinop": ...
+
+    # Normal operator: A.N = A.H @ A
+    @property
+    def N(self) -> "BartLinop": ...
+
+    # Shape
+    @property
+    def ishape(self) -> tuple[int, ...]: ...   # input shape (C-order)
+    @property
+    def oshape(self) -> tuple[int, ...]: ...   # output shape (C-order)
+```
+
+Composition (`A @ B`), sum (`A + B`), and scalar multiplication are built
+implicitly from magic methods — they are **not** exposed as separate public
+factory functions (`chain()`, `plus()`, etc.).
+
+### 7.3 Public API surface
+
+**Core data ops:**
+- `bt.fft(x, ...)` / `bt.ifft(x, ...)` — Cartesian FFT/iFFT
+- `bt.nufft(x, traj, ...)` / `bt.nufft_adj(x, traj, ...)` — Non-Cartesian NuFFT
+
+**Phantom / test data:**
+- `bt.phantom(shape, ...)` — analytic MRI phantom
+
+**Sensitivity estimation:**
+- `bt.ecalib(kspace, ...)` — ESPIRiT coil sensitivity maps
+- `bt.caldir(kspace, ...)` — direct calibration
+
+**Full forward encoding operators** (return `BartLinop`):
+- `bt.sense_op(sens, mask=None)` — Cartesian SENSE (multi-coil)
+- `bt.nufft_op(traj, shape, ...)` — Non-Cartesian SENSE encoding
+- `bt.pics(kspace, sens, ...)` — convenience wrapper (ecalib + SENSE + PICS)
+
+**Regularizers** (return `BartLinop` / proximal `BartProxOp`):
+- `bt.wavelet_op(shape, wave_type='db4', ...)` — wavelet sparsity transform
+- `bt.tv_op(shape, ...)` — gradient / total variation operator
+- `bt.llr_op(shape, block_size, ...)` — locally low-rank (Casorati) operator
+- `bt.lr_op(shape, ...)` — global low-rank / nuclear norm prox
+
+**Iterative algorithms:**
+- `bt.conjgrad(A, b, ...)` — conjugate gradient
+- `bt.ist(A, b, prox, ...)` — iterative soft thresholding
+- `bt.fista(A, b, prox, ...)` — FISTA
+- `bt.irgnm(F, DF, ...)` — iteratively regularised Gauss–Newton
+- `bt.chambolle_pock(K, prox_f, prox_g, ...)` — primal-dual
+
+**Nonlinear operators** (return `BartNlinOp`):
+- `bt.moba_op(...)` — model-based reconstruction (MOBA)
+- `bt.nlinv_op(...)` — nonlinear inversion (joint image + sensitivity)
+
+**Low-level CLI access** (subprocess path):
+- `bartorch.tools.*` — auto-generated wrappers for all 100+ BART CLI tools
+
+### 7.4 Op Coverage — Old bartpy → bartorch
 
 | Old module | Old class/function | New bartorch path |
 |---|---|---|
 | `bartpy.num.fft` | `fft()`, `ifft()` | `bartorch.ops.fft` |
 | `bartpy.simu.phantom` | `phantom()` | `bartorch.ops.phantom` |
-| `bartpy.linops.ops` | `identity()`, `diag()`, … | `bartorch.ops.linops` |
-| `bartpy.linops.linop` | `forward()`, `adjoint()`, `normal()`, `pseudo_inv()` | `bartorch.ops.linops` |
-| `bartpy.linops.linop` | `plus()`, `chain()`, `stack()` | `bartorch.ops.linops` |
+| `bartpy.linops.linop` | `forward()`, `adjoint()`, `normal()` | `BartLinop.__call__`, `.H`, `.N` |
+| `bartpy.linops.linop` | `plus()`, `chain()` | `BartLinop.__add__`, `__matmul__` |
+| `bartpy.linops.ops` | `identity()`, `diag()` | `bartorch.ops.linops` (internal helpers) |
 | `bartpy.italgos.italgos` | `conjgrad()`, `ist()`, `fista()` | `bartorch.ops.italgos` |
 | `bartpy.italgos.italgos` | `irgnm()`, `irgnm2()`, `chambolle_pock()` | `bartorch.ops.italgos` |
-| `bartpy.tools.*` | all 100+ CLI tools | `bartorch.tools.*` (FIFO-based) |
+| `bartpy.tools.*` | all 100+ CLI tools | `bartorch.tools.*` (subprocess) |
 
 ---
 
@@ -390,57 +488,77 @@ equivalent.  All ops route through the same hot-path or FIFO dispatcher.
 ### Phase 0 — Layout & Infrastructure ✅
 - [x] Add `bart` git submodule
 - [x] Create `bartorch/` package skeleton
-- [x] `BartTensor`, `BartContext`, dispatch graph (Python stubs)
-- [x] FIFO fallback (`bartorch/pipe/`)
+- [x] `BartContext`, dispatch graph (Python stubs)
+- [x] Subprocess fallback (`bartorch/pipe/`)
 - [x] `CMakeLists.txt` skeleton
 - [x] `pyproject.toml`, updated `setup.py`
 - [x] `agents.md` (this file)
-- [x] Initial tests (`test_tensor`, `test_context`, `test_cfl`)
+- [x] Initial tests (`test_context`, `test_cfl`)
 
 ### Phase 1 — Build System & C++ Extension Core
 - [ ] Resolve BART Makefile → CMake source list for static lib build
+- [ ] Implement `tensor_bridge.hpp`: zero-copy `torch.Tensor` ↔ CFL with axis reversal
+  - Accept C-order `torch.Tensor` (complex64), reverse dims before `register_mem_cfl_non_managed()`
+  - Allocate C-order output tensor, reverse dims for output CFL registration
+  - No copy path (reinterpret data_ptr() directly)
 - [ ] Implement `_bartorch_ext.run()` in `bartorch_ext.cpp`
-  - Register input tensors via `register_mem_cfl_non_managed()`
-  - Allocate output tensors with Fortran strides
   - Build argv, call `bart_command()`
-  - Unlink CFL names, return `BartTensor`
+  - Unlink CFL names, return plain `torch.Tensor`
 - [ ] CI: build extension on Ubuntu with PyTorch CPU wheel
 - [ ] Tests: `test_ops.py` with `bt.phantom()` and `bt.fft()`
 
-### Phase 2 — FFT, Phantom, ecalib, PICS
-- [ ] Implement `bart_ops.cpp` functions: `bart_fft`, `bart_phantom`,
+### Phase 2 — FFT, NuFFT, Phantom, ecalib, PICS
+- [ ] Implement `bart_ops.cpp` functions: `bart_fft`, `bart_nufft`, `bart_phantom`,
       `bart_ecalib`, `bart_pics`
-- [ ] Wire Python bindings in `bartorch/ops/`
+- [ ] Wire Python bindings: `bartorch/ops/fft.py`, `phantom.py`, `pics.py`
 - [ ] Integration tests using real MRI demo data
 
-### Phase 3 — Linear Operators & Iterative Algorithms
-- [ ] BartLinop: opaque C++ handle wrapping `struct linop_s*`
-- [ ] Implement all linop constructors + composition
-- [ ] Implement iterative algorithms (conjgrad, IST, FISTA, IRGNM, CP)
+### Phase 3 — `BartLinop` + Encoding Operators
+- [ ] `BartLinop`: opaque C++ handle wrapping `struct linop_s*`, exposed with:
+  - `__call__`, `__matmul__`, `__add__`, `__mul__` / `__rmul__`, `.H`, `.N`
+  - Composition and sum build BART's `linop_chain()` / `linop_plus()` internally
+  - `ishape` / `oshape` in C-order (reversed from BART's Fortran dims)
+- [ ] Implement `bartorch/ops/encoding.py`: `sense_op()`, `nufft_op()`
+- [ ] Integration tests for forward encoding round-trip
+
+### Phase 4 — Regularizers & Proximal Operators
+- [ ] `BartProxOp`: C++ handle wrapping `struct operator_p_s*`
+- [ ] Implement `bartorch/ops/regularizers.py`:
+  - `wavelet_op()` — `linop_wavelet_create()`
+  - `tv_op()` — `linop_grad_create()`
+  - `llr_op()` — `linop_casorati_create()` + `lrthresh_create()`
+  - `lr_op()` — nuclear norm prox via `svthresh()`
+- [ ] Tests: verify proximal operator shapes and shrinkage behaviour
+
+### Phase 5 — Iterative Algorithms
+- [ ] Implement `bartorch/ops/italgos.py`:
+  - `conjgrad()`, `ist()`, `fista()`, `irgnm()`, `chambolle_pock()`
+  - Accept `BartLinop` / `BartProxOp` arguments; return `torch.Tensor`
 - [ ] Tests mirroring `tests/test_linop.py` from old bartpy
 
-### Phase 4 — Auto-generated Tools (`bartorch.tools`)
+### Phase 6 — Nonlinear Operators
+- [ ] `BartNlinOp`: wrapping BART's `struct nlop_s*`
+  - `nlinv_op()` — joint image + sensitivity estimation
+  - `moba_op()` — model-based reconstruction
+- [ ] Tests for nonlinear forward + Jacobian
+
+### Phase 7 — Auto-generated Tools (`bartorch.tools`)
 - [ ] Write `build_tools/gen_tools.py`
   - Query `bart <tool> --interface` for all tools
-  - Generate `bartorch/tools/_generated.py` using FIFO-based backend
-  - Accept/return `BartTensor` or `torch.Tensor` (auto-promote)
+  - Generate `bartorch/tools/_generated.py` using subprocess backend
+  - Accept/return plain `torch.Tensor` (auto-convert via subprocess path)
 - [ ] CI: regenerate and test on each BART submodule bump
 
-### Phase 5 — CUDA Support
+### Phase 8 — CUDA Support
 - [ ] Add CUDA sources to `CMakeLists.txt` (`USE_CUDA=ON`)
-- [ ] Implement `cuda/cuda_bridge.hpp`
-  - `register_cuda_input()` using device pointer
-  - `sync_after_bart()` using `cuda_sync_device()`
+- [ ] Implement `cuda/cuda_bridge.hpp`:
+  - Register CUDA device pointer via `register_mem_cfl_non_managed()`
+  - BART's vptr detects device memory → routes to GPU kernels automatically
+  - `cuda_sync_device()` after `bart_command()`
 - [ ] Dispatch update: detect CUDA tensors, verify BART CUDA availability
 - [ ] CI: test on GPU runner (if available)
 
-### Phase 6 — DSL Hotpath Enhancements
-- [ ] `BartContext.__enter__` pre-allocates a CFL namespace session
-- [ ] Chain multiple `bart_command()` calls without re-registering shared tensors
-- [ ] `__torch_function__` dispatch for arithmetic on `BartTensor`
-- [ ] Benchmarks: compare hot-path vs FIFO vs old bartpy subprocess
-
-### Phase 7 — PyPI Packaging
+### Phase 9 — PyPI Packaging
 - [ ] Wheel audit: ensure only `_bartorch_ext.so` + pure Python are packaged
 - [ ] CI: build wheels on Linux (x86_64, aarch64) via cibuildwheel
 - [ ] CI: macOS (x86_64, arm64) wheels
@@ -451,66 +569,99 @@ equivalent.  All ops route through the same hot-path or FIFO dispatcher.
 
 ## 9. API Usage Examples
 
-### 9.1 Pure hot path
+### 9.1 Pure hot path — C-order tensors in, C-order tensors out
 
 ```python
 import bartorch as bt
+import torch
 
-# Both calls stay entirely in C (no copies, no subprocess)
+# All bartorch functions accept/return plain torch.Tensor (C-order, complex64).
+# The axis reversal and zero-copy bridge happen inside the C++ extension.
 with bt.bart_context():
-    phantom = bt.ops.phantom([256, 256])          # BartTensor, Fortran-order
-    kspace  = bt.ops.fft(phantom, flags=3)        # zero-copy in-place style
+    # shape (z, y) in Python  ↔  BART sees (read=y, phase=z) in Fortran order
+    phantom = bt.phantom([256, 256])          # torch.Tensor, shape (256, 256)
+    kspace  = bt.fft(phantom, flags=3)        # zero-copy in-process
 
-# phantom and kspace are torch.Tensor-compatible:
 print(kspace.shape, kspace.dtype)  # torch.Size([256, 256]), torch.complex64
 ```
 
-### 9.2 Mixed (plain torch.Tensor input)
+### 9.2 Mixed — plain torch.Tensor input, no promotion needed
 
 ```python
 import torch, bartorch as bt
 
-data = torch.randn(256, 256, dtype=torch.complex64)  # plain tensor
-
-# Auto-promoted to BartTensor (one copy), then hot path
-result = bt.ops.fft(data, flags=3)
+data = torch.randn(256, 256, dtype=torch.complex64)  # standard PyTorch tensor
+result = bt.fft(data, flags=3)                        # accepted directly, no copy
 ```
 
-### 9.3 Full MRI reconstruction
+### 9.3 Full MRI reconstruction with BartLinop
 
 ```python
 import bartorch as bt
 
-kspace = bt.utils.readcfl("knee_kspace")          # returns numpy, or:
-kspace = bt.ops.phantom([256, 256], kspace=True, ncoils=8)
+# shape: (coils, views, samples)  — C-order, reversed from BART's (samples, views, coils)
+kspace = bt.phantom([8, 1, 256], kspace=True)
+sens   = bt.ecalib(kspace, calib_size=24, maps=1)  # (coils, z, y, x)
 
-sens   = bt.ops.ecalib(kspace, calib_size=24, maps=1)
-reco   = bt.ops.pics(kspace, sens, lambda_=0.01, wav=True)
+# Full forward encoding operator (Cartesian SENSE)
+A = bt.sense_op(sens)     # BartLinop: (z, y, x) → (coils, z, y, x)
 
-# Use as a normal torch tensor for downstream processing
+# Regularizer
+W = bt.wavelet_op(A.ishape)   # BartLinop: wavelet sparsity
+
+# Reconstruction: solve  min_x ||A x - y||^2 + lambda ||W x||_1
+x0 = torch.zeros(A.ishape, dtype=torch.complex64)
+reco = bt.fista(A, kspace, W, lam=0.01, niter=50)  # plain torch.Tensor
+
 import torch
-reco_abs = reco.abs()
+reco_abs = reco.abs()  # interoperable with all PyTorch ops
 ```
 
-### 9.4 Linear operator pipeline
+### 9.4 Operator algebra
 
 ```python
 import bartorch as bt
 
-fft_op = bt.ops.fft_linop([256, 256], flags=3)
-eye    = bt.ops.identity([256, 256])
-combo  = bt.ops.chain(fft_op, eye)
+fft_op = bt.sense_op(sens)          # A: image → k-space
+wav_op = bt.wavelet_op(fft_op.ishape)
 
-x = bt.ops.bart_zeros([256, 256])
-y = bt.ops.forward(combo, [256, 256], x)
+# Composition via @
+combined = fft_op @ wav_op          # BartLinop: coeff → k-space
+
+# Sum via +
+reg = wav_op + bt.tv_op(fft_op.ishape)  # combined regularizer
+
+# Adjoint via .H
+AT = fft_op.H                       # BartLinop: k-space → image
+
+# Normal equations via .N
+ATA = fft_op.N                      # BartLinop: A^H A
 ```
 
-### 9.5 High-level CLI wrapper (FIFO path)
+### 9.5 Non-Cartesian SENSE + iterative recon
+
+```python
+import bartorch as bt
+import torch
+
+traj = ...  # (2/3, views, samples) torch.Tensor — trajectory
+kspace = ... # (coils, views, samples)
+
+# Non-Cartesian SENSE encoding operator
+E = bt.nufft_op(traj, img_shape=(256, 256))  # BartLinop
+
+sens  = bt.ecalib(kspace, ...)
+A     = bt.sense_op(sens, E)  # compose SENSE + NuFFT
+
+reco  = bt.chambolle_pock(A, kspace, prox_f=bt.wavelet_op(A.ishape), lam=0.005)
+```
+
+### 9.6 High-level CLI wrapper (subprocess path)
 
 ```python
 import bartorch.tools as bart
 
-# Same as old bartpy.tools, but no temp files on disk
+# Same as old bartpy.tools, but no temp files on disk (/dev/shm used on Linux)
 output = bart.pics(kspace, sens, l=1, r=0.01, i=30)
 ```
 
@@ -589,16 +740,20 @@ already implemented in BART and their exposure status in bartorch.
 | Direct | `src/calib/direct.c/.h` | `direct_calib()` | `caldir` | ✅ `bartorch.ops.pics.caldir()` |
 | PICS | `src/pics.c` | Composite | `pics` | ✅ `bartorch.ops.pics.pics()` |
 
-### 11.7 Linop Framework (already partially exposed)
+### 11.7 Linop Framework — Internal vs Public
 
-| Op | C API (`linops/linop.h`) | Bartorch |
+BART's `linop_chain()`, `linop_plus()`, `linop_stack()`, etc. are used
+**internally** by `BartLinop.__matmul__`, `__add__`, and similar magic
+methods.  They are **not** exposed as standalone public Python functions.
+
+| C API (`linops/linop.h`) | Used by | Public? |
 |---|---|---|
-| Chain | `linop_chain()`, `linop_chainN()`, `linop_chain_FF()` | ⚠️ stub in `ops.linops` |
-| Plus | `linop_plus()`, `linop_plus_FF()` | ⚠️ stub |
-| Stack | `linop_stack()`, `linop_stack_cod()` | ⚠️ stub |
-| Pseudo-inverse | `linop_pseudo_inv()` | ⚠️ stub |
-| Normal equations | `linop_normal()`, `linop_norm_inv_unchecked()` | ⚠️ stub |
-| Get normal op | `linop_get_normal()` | ⚠️ stub |
+| `linop_chain()`, `linop_chainN()` | `BartLinop.__matmul__` | ❌ internal |
+| `linop_plus()`, `linop_plus_FF()` | `BartLinop.__add__` | ❌ internal |
+| `linop_stack()`, `linop_stack_cod()` | `BartLinop.stack()` class method | ✅ |
+| `linop_pseudo_inv()` | `BartLinop.pseudo_inv()` | ✅ |
+| `linop_normal()` | `BartLinop.N` property | ✅ |
+| `linop_get_normal()` | `BartLinop.N` property | ❌ internal |
 
 ### 11.8 Other Linops Not Yet Exposed (Priority Order)
 
@@ -621,22 +776,22 @@ The following are implemented in BART and should be exposed in Phase 2–3:
 
 ### 11.9 Priority Recommendations
 
-**Phase 2 priorities** (most commonly needed for custom algorithms):
-1. `nufft_create()` — Non-Cartesian encoding, essential for non-Cartesian MRI
-2. `linop_grad_create()` — Required to build TV regularization from scratch
-3. `linop_fft_create()` / `linop_fftc_create()` — Cartesian FFT as linop
-4. `linop_cdiag_create()` — Coil sensitivity encoding
+**Phase 2–3 priorities** (most commonly needed for custom algorithms):
+1. `nufft_create()` — Non-Cartesian k-space encoding (`bt.nufft_op`)
+2. `linop_fft_create()` / `linop_fftc_create()` — Cartesian FFT as linop
+3. `linop_cdiag_create()` — Coil sensitivity encoding (`bt.sense_op`)
+4. `linop_grad_create()` — Required to build TV regularization (`bt.tv_op`)
 
-**Phase 3 priorities** (advanced custom algorithms):
-5. `sense_nc_init()` / `maps_create()` — Full Cartesian/non-Cartesian SENSE linop
-6. `linop_casorati_create()` — Subspace projection, GRASP, XD-GRASP
-7. `lrthresh_create()` — Low-rank regularization (proximal op)
-8. `linop_wavelet_create()` — Wavelet regularization
+**Phase 4 priorities** (regularizers + proximal ops):
+5. `linop_wavelet_create()` — Wavelet sparsity (`bt.wavelet_op`)
+6. `linop_casorati_create()` + `lrthresh_create()` — Locally low-rank (`bt.llr_op`)
+7. `nuclearnorm()` / `svthresh()` — Global low-rank prox (`bt.lr_op`)
 
-**Phase 4+ (specialised):**
+**Phase 5–6 (advanced):**
+8. `sense_nc_init()` / `maps_create()` — Full Non-Cartesian SENSE linop
 9. `tse()` — Time segmentation for B0 correction (MOBA-style)
-10. Wave-CAIPI (`linop_wavelet_create()` + k-space pattern)
-11. Motion operators (`linop_interpolate_create()`)
+10. NLOP framework (`struct nlop_s*`) — `nlinv_op()`, `moba_op()`
+11. Wave-CAIPI and motion operators
 
 ---
 

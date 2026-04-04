@@ -1,9 +1,16 @@
-"""FFT operations — bartorch.ops.fft."""
+"""FFT operations — bartorch.ops.fft.
+
+Provides multidimensional FFT and inverse-FFT via BART's ``num/fft`` module.
+All functions accept :class:`~bartorch.core.tensor.BartTensor` inputs and
+return a :class:`~bartorch.core.tensor.BartTensor`.
+"""
 
 from __future__ import annotations
 
 from bartorch.core.graph import dispatch
 from bartorch.core.tensor import BartTensor
+
+__all__ = ["fft", "ifft"]
 
 
 def fft(
@@ -18,20 +25,33 @@ def fft(
 
     Parameters
     ----------
-    input:
-        Input array (BartTensor or any tensor/ndarray that will be promoted).
-    flags:
+    input : BartTensor
+        Input array.  Any ``torch.Tensor`` or NumPy array will be promoted
+        to :class:`BartTensor` automatically (with a single copy).
+    flags : int
         Bitmask selecting the dimensions to transform.
-    unitary:
-        Apply unitary normalization.
-    inverse:
-        Compute inverse FFT.
-    centered:
-        Use centered (orthogonal) FFT convention.
+        Bit 0 → dimension 0 (readout), bit 1 → dimension 1 (phase), etc.
+        Example: ``flags=6`` transforms dimensions 1 and 2.
+    unitary : bool, optional
+        Apply unitary (1/√N) normalisation.  Default ``False``.
+    inverse : bool, optional
+        Compute inverse FFT.  Default ``False`` (forward FFT).
+    centered : bool, optional
+        Use the centred (orthogonal) FFT convention (i.e. ``fftshift``
+        applied before and after the transform).  Default ``True``.
 
     Returns
     -------
     BartTensor
+        Complex64 Fortran-order tensor with the same shape as *input*.
+
+    Examples
+    --------
+    >>> import bartorch.ops as ops
+    >>> ph = ops.phantom([256, 256])
+    >>> kspace = ops.fft(ph, flags=3)          # transform dims 0 and 1
+    >>> kspace.shape
+    torch.Size([256, 256])
     """
     return dispatch(
         "fft",
@@ -40,7 +60,6 @@ def fft(
         flags=flags,
         u=unitary,
         i=inverse,
-        # centered is the default in BART; no flag needed unless False
     )
 
 
@@ -51,5 +70,29 @@ def ifft(
     unitary: bool = False,
     centered: bool = True,
 ) -> BartTensor:
-    """Convenience wrapper: fft(..., inverse=True)."""
+    """Inverse multidimensional FFT — convenience alias for ``fft(..., inverse=True)``.
+
+    Parameters
+    ----------
+    input : BartTensor
+        K-space data.
+    flags : int
+        Bitmask selecting the dimensions to transform back to image space.
+    unitary : bool, optional
+        Apply unitary normalisation.  Default ``False``.
+    centered : bool, optional
+        Use centred FFT convention.  Default ``True``.
+
+    Returns
+    -------
+    BartTensor
+        Image-space complex64 Fortran-order tensor.
+
+    Examples
+    --------
+    >>> import bartorch.ops as ops
+    >>> ph = ops.phantom([256, 256])
+    >>> kspace  = ops.fft(ph, flags=3)
+    >>> img_rec = ops.ifft(kspace, flags=3)
+    """
     return fft(input, flags, unitary=unitary, inverse=True, centered=centered)

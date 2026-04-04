@@ -95,5 +95,55 @@ git submodule update --init --recursive
 
 ## License
 
-BSD 3-Clause — see [LICENSE](LICENSE).  
+MIT — see [LICENSE](LICENSE).  
 BART is distributed under its own BSD license; see `bart/LICENSE`.
+
+---
+
+## Roadmap
+
+The table below lists MRI-relevant BART linear operators and internals that
+are implemented in BART but **not yet exposed** in bartorch.  They are the
+primary targets for the next development phases.
+
+### Phase 2 — Cartesian encoding & basic linops
+
+| Operator | BART source | C API |
+|---|---|---|
+| FFT as linop | `linops/someops.h` | `linop_fft_create()`, `linop_fftc_create()` |
+| Gradient / TV | `linops/grad.h` | `linop_grad_create()` |
+| Diagonal (coil sens.) | `linops/someops.h` | `linop_cdiag_create()`, `linop_rdiag_create()` |
+| NUFFT encoding | `noncart/nufft.h` | `nufft_create()`, `nufft_create2()` |
+
+### Phase 3 — Full MRI encoding & advanced regularisation
+
+| Operator | BART source | C API |
+|---|---|---|
+| Cartesian SENSE | `sense/model.h` | `sense_init()`, `maps_create()`, `maps2_create()` |
+| Non-Cartesian SENSE | `sense/modelnc.h` | `sense_nc_init()` |
+| Low-rank / Casorati | `linops/casorati.h` | `linop_casorati_create()` |
+| Low-rank thresholding | `lowrank/lrthresh.h` | `lrthresh_create()` ← returns `operator_p_s*`, not `linop_s*` |
+| Wavelet | `linops/waveop.h` | `linop_wavelet_create()` (Haar, Daubechies-2, CDF-4/4) |
+| Reshape / Slice / Permute | `linops/someops.h` | `linop_reshape_create()`, `linop_slice_create()`, `linop_permute_create()` |
+| Sum / Repmat | `linops/sum.h` | `linop_sum_create()`, `linop_repmat_create()` |
+
+### Phase 4 — Specialised / advanced
+
+| Operator | BART source | C API |
+|---|---|---|
+| Time segmentation (B0) | `simu/tsegf.h` | `tse()`, `tse_der()`, `tse_adj()` |
+| Wave-CAIPI | `linops/waveop.h` + k-space pattern | combine `linop_wavelet_create()` with sampling |
+| Motion interpolation | `motion/interpolate.h` | `linop_interpolate_create()` |
+
+### Iterative algorithms (Phase 2/3)
+
+| Algorithm | BART source | Notes |
+|---|---|---|
+| Conjugate gradient | `iter/italgos.c` | `iter_conjgrad()` |
+| IST / FISTA | `iter/iter.c` | `iter2_ist()`, `iter2_fista()` |
+| IRGNM | `iter/italgos.c` | `iter2_irgnm()`, `iter2_irgnm2()` |
+| Chambolle-Pock | `iter/italgos.c` | `iter2_chambolle_pock()` |
+
+See [`agents.md §11`](agents.md) for the full source-level inventory with
+exact function signatures, header paths, and exposure-priority ordering.
+

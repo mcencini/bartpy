@@ -46,6 +46,7 @@ See agents.md for the full implementation roadmap.
 from bartorch.ops.fft import fft, ifft
 from bartorch.ops.italgos import chambolle_pock, conjgrad, fista, irgnm, ist
 from bartorch.ops.linops import (
+    BartLinop,
     adjoint,
     chain,
     diag,
@@ -64,6 +65,7 @@ __all__ = [
     "fft",
     "ifft",
     "phantom",
+    "BartLinop",
     "identity",
     "diag",
     "fft_linop",

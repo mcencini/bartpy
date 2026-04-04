@@ -48,7 +48,7 @@ jobs:
       - name: Install docs dependencies
         run: |
           pip install scikit-build-core
-          pip install -e ".[docs]" --no-build-isolation
+          BARTORCH_SKIP_EXT=1 pip install -e ".[docs]" --no-build-isolation
           pip install -r docs/requirements.txt
 
       - name: Build Sphinx HTML

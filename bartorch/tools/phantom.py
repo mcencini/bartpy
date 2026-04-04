@@ -1,4 +1,4 @@
-"""Phantom / simulation — bartorch.ops.phantom.
+"""Phantom / simulation — bartorch.tools.phantom.
 
 Wraps BART's ``simu/phantom`` module for generating numerical MRI phantoms
 (Shepp-Logan and geometric shapes) in image space or k-space.
@@ -63,15 +63,15 @@ def phantom(
     --------
     Single-coil 2-D Shepp-Logan phantom:
 
-    >>> import bartorch.ops as ops
-    >>> ph = ops.phantom([256, 256])
+    >>> import bartorch.tools as bt
+    >>> ph = bt.phantom([256, 256])
     >>> ph.shape
     torch.Size([1, 256, 256])
 
     8-coil 256×256 k-space:
 
-    >>> kspace = ops.phantom([256, 256], kspace=True, ncoils=8)
-    >>> kspace.shape
+    >>> ks = bt.phantom([256, 256], kspace=True, ncoils=8)
+    >>> ks.shape
     torch.Size([8, 1, 256, 256])
     """
     return dispatch(

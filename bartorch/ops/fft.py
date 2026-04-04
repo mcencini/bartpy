@@ -1,33 +1,36 @@
 """FFT operations — bartorch.ops.fft.
 
 Provides multidimensional FFT and inverse-FFT via BART's ``num/fft`` module.
-All functions accept :class:`~bartorch.core.tensor.BartTensor` inputs and
-return a :class:`~bartorch.core.tensor.BartTensor`.
+All functions accept plain ``torch.Tensor`` inputs (cast to ``complex64``
+automatically by :func:`~bartorch.core.tensor.bart_op`) and return a plain
+``torch.Tensor``.
 """
 
 from __future__ import annotations
 
+import torch
+
 from bartorch.core.graph import dispatch
-from bartorch.core.tensor import BartTensor
+from bartorch.core.tensor import bart_op
 
 __all__ = ["fft", "ifft"]
 
 
+@bart_op
 def fft(
-    input: BartTensor,
+    input: torch.Tensor,
     flags: int,
     *,
     unitary: bool = False,
     inverse: bool = False,
     centered: bool = True,
-) -> BartTensor:
+) -> torch.Tensor:
     """Multidimensional (i)FFT via BART's num/fft module.
 
     Parameters
     ----------
-    input : BartTensor
-        Input array.  Any ``torch.Tensor`` or NumPy array will be promoted
-        to :class:`BartTensor` automatically (with a single copy).
+    input : torch.Tensor
+        Input array (any dtype; cast to ``complex64`` automatically).
     flags : int
         Bitmask selecting the dimensions to transform.
         Bit 0 → dimension 0 (readout), bit 1 → dimension 1 (phase), etc.
@@ -42,8 +45,8 @@ def fft(
 
     Returns
     -------
-    BartTensor
-        Complex64 Fortran-order tensor with the same shape as *input*.
+    torch.Tensor
+        Complex64 tensor with the same shape as *input*.
 
     Examples
     --------
@@ -63,18 +66,19 @@ def fft(
     )
 
 
+@bart_op
 def ifft(
-    input: BartTensor,
+    input: torch.Tensor,
     flags: int,
     *,
     unitary: bool = False,
     centered: bool = True,
-) -> BartTensor:
+) -> torch.Tensor:
     """Inverse multidimensional FFT — convenience alias for ``fft(..., inverse=True)``.
 
     Parameters
     ----------
-    input : BartTensor
+    input : torch.Tensor
         K-space data.
     flags : int
         Bitmask selecting the dimensions to transform back to image space.
@@ -85,8 +89,8 @@ def ifft(
 
     Returns
     -------
-    BartTensor
-        Image-space complex64 Fortran-order tensor.
+    torch.Tensor
+        Image-space complex64 tensor.
 
     Examples
     --------
@@ -95,4 +99,12 @@ def ifft(
     >>> kspace  = ops.fft(ph, flags=3)
     >>> img_rec = ops.ifft(kspace, flags=3)
     """
-    return fft(input, flags, unitary=unitary, inverse=True, centered=centered)
+    # Input is already complex64 — normalised by the @bart_op decorator on ifft.
+    return dispatch(
+        "fft",
+        [input],
+        None,
+        flags=flags,
+        u=unitary,
+        i=True,
+    )

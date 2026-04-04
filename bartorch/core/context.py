@@ -1,8 +1,8 @@
 """
-bartorch.core.context — Thread-local execution context for hot-path dispatch.
+bartorch.core.context — Thread-local execution context for batching BART calls.
 
 The ``BartContext`` manages a session of BART in-memory CFL names so that
-multiple chained operations can share the same backing memory without
+multiple chained operations share the same backing memory without
 re-registering tensors between calls.
 """
 
@@ -17,24 +17,27 @@ import torch
 
 
 class BartContext:
-    """Thread-local session state for the hot-path dispatcher.
+    """Thread-local session state for the C++ extension dispatcher.
 
-    Within an active context, every :class:`~bartorch.core.tensor.BartTensor`
-    that enters a BART operation is registered in BART's in-memory CFL
-    namespace under a deterministic ``_bt_<uuid>.mem`` name.  Intermediate
-    results produced by chained operations are stored as ``BartTensor`` with
-    matching names, allowing consecutive BART tool calls to consume them
-    without any Python↔C boundary crossings beyond the initial and final ones.
+    Within an active context every tensor that enters a BART operation is
+    registered in BART's in-memory CFL namespace under a deterministic
+    ``_bt_<uuid>.mem`` name.  Intermediate results produced by chained
+    operations are stored with matching names, allowing consecutive
+    ``bart_command()`` calls to consume them without any Python↔C boundary
+    crossings beyond the initial and final ones — no disk I/O, no
+    ``/dev/shm`` writes.
 
     Usage::
 
-        with BartContext() as ctx:
+        with bart_context() as ctx:
             result = bt.fft(bt.phantom([256, 256]), flags=3)
             # → no copies, two bart_command() calls, all in C
 
-    Outside a context, the dispatcher falls back to single-operation calls
-    (still zero-copy if inputs are already ``BartTensor``, but without the
-    persistent registry session).
+    Outside a context, the dispatcher creates and destroys a mini-session per
+    operation.  Both styles produce identical results; the context simply
+    eliminates redundant re-registration overhead for call chains.
+
+    Requires the compiled ``_bartorch_ext`` C++ extension.
     """
 
     _local = threading.local()
@@ -46,7 +49,7 @@ class BartContext:
     # Context manager protocol
     # ------------------------------------------------------------------
 
-    def __enter__(self) -> BartContext:
+    def __enter__(self) -> "BartContext":
         BartContext._local.active = self
         return self
 
@@ -71,8 +74,10 @@ class BartContext:
         self._registered.pop(name, None)
 
     def _cleanup(self) -> None:
-        """Unlink all in-memory CFLs registered in this session."""
-        # Will call into C extension once compiled; no-op at stub stage.
+        """Unlink all in-memory CFLs registered in this session.
+
+        Calls into the C++ extension once compiled; no-op at stub stage.
+        """
         self._registered.clear()
 
     # ------------------------------------------------------------------
@@ -80,7 +85,7 @@ class BartContext:
     # ------------------------------------------------------------------
 
     @classmethod
-    def current(cls) -> BartContext | None:
+    def current(cls) -> "BartContext | None":
         """Return the active context for the current thread, or ``None``."""
         return getattr(cls._local, "active", None)
 
@@ -92,7 +97,7 @@ class BartContext:
 
 @contextmanager
 def bart_context() -> Generator[BartContext, None, None]:
-    """Convenience context manager that creates and activates a BartContext.
+    """Convenience context manager that creates and activates a :class:`BartContext`.
 
     Example::
 

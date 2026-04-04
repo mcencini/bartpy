@@ -1,159 +1,145 @@
 """
-BartTensor — a ``torch.Tensor`` subclass that carries metadata required for
-zero-copy interoperability with BART's in-memory CFL registry.
+bartorch.core.tensor — private normalisation utilities and the ``@bart_op`` decorator.
 
-A ``BartTensor`` always stores data as ``torch.complex64`` in column-major
-(Fortran) order — matching BART's native ``complex float*`` layout — and
-records the logical BART dimension tuple (up to 16 dims as per ``DIMS`` in
-BART).
+The :func:`bart_op` decorator is the **single entry point** for dtype
+normalisation and should be applied to every public bartorch op function.
 
-Key constraints
----------------
-* dtype  : ``torch.complex64`` (``_Complex float`` in C)
-* strides: Fortran (column-major) — created via ``torch.empty(...).t()``
-  or by allocating with reversed strides from the C++ extension.
-* device : CPU or CUDA (GPU BartTensors carry a device pointer that BART's
-  CUDA-enabled kernels can consume directly when compiled with ``USE_CUDA``).
+On the **input side** the decorator:
 
-The subclass participates in ``__torch_function__`` so that operations that
-mix ``BartTensor`` inputs stay on the hot path wherever possible, and fall
-back to copies + regular torch ops otherwise.
+* Casts every ``torch.Tensor`` argument to ``complex64`` (zero-copy
+  passthrough when the dtype already matches).
+* Converts ``numpy.ndarray`` inputs to ``complex64`` ``torch.Tensor``.
+* All other arguments (ints, strings, lists, …) pass through unchanged.
+
+On the **output side** the decorator returns the result as-is (``complex64``
+from BART).  Pass ``real_output=True`` for ops that are semantically
+real-valued; the decorator will then return ``result.real`` instead.
+
+All other names in this module are **private** (``_`` prefix) and are not
+part of the public API.
+
+Public API
+----------
+bart_op — decorator applied to every bartorch op function
 """
 
 from __future__ import annotations
 
+import functools
+
 import torch
 
-
-class BartTensor(torch.Tensor):
-    """Torch tensor tagged for zero-copy BART hot-path dispatch.
-
-    Do **not** instantiate directly; use :func:`bart_empty`,
-    :func:`bart_zeros`, :func:`bart_from_numpy`, or :func:`bart_from_tensor`
-    instead.
-    """
-
-    # Internal slot: unique name in the BART in-memory CFL registry.
-    _bart_name: str | None
-
-    @staticmethod
-    def __new__(cls, data: torch.Tensor, bart_name: str | None = None):
-        # ``torch.Tensor.__new__`` returns a view; the subclass attribute is
-        # attached afterwards in ``__init__``.
-        instance = torch.Tensor._make_subclass(cls, data)
-        instance._bart_name = bart_name
-        return instance
-
-    def __repr__(self):
-        return (
-            f"BartTensor(shape={tuple(self.shape)}, "
-            f"dtype={self.dtype}, device={self.device}, "
-            f"bart_name={self._bart_name!r})"
-        )
-
-    @classmethod
-    def __torch_function__(cls, func, types, args=(), kwargs=None):
-        if kwargs is None:
-            kwargs = {}
-        # All inputs that are BartTensors → attempt hot path via registered
-        # dispatch table; unknown ops fall through to the standard path which
-        # may return a plain torch.Tensor.
-        return super().__torch_function__(func, types, args, kwargs)
+__all__ = ["bart_op"]
 
 
 # ---------------------------------------------------------------------------
-# Factory helpers
+# Private normalisation helpers
 # ---------------------------------------------------------------------------
 
 
-def bart_empty(
-    dims: list[int],
-    device: str | torch.device = "cpu",
-) -> BartTensor:
-    """Allocate an uninitialised ``BartTensor`` with Fortran-order strides.
+def _as_complex64(t: torch.Tensor) -> torch.Tensor:
+    """Cast *t* to ``torch.complex64``, zero-copy if already correct."""
+    if t.dtype == torch.complex64:
+        return t
+    return t.to(torch.complex64)
 
-    Parameters
-    ----------
-    dims:
-        BART dimension list (up to 16 elements; trailing 1-dims may be
-        omitted).
-    device:
-        ``"cpu"`` or ``"cuda"`` / ``torch.device``.
 
-    Returns
-    -------
-    BartTensor
-        Uninitialised column-major complex64 tensor.
+def _reverse_dims(dims: list[int] | tuple[int, ...]) -> list[int]:
+    """Reverse a dim list: C-order ↔ Fortran-order (or vice versa).
+
+    bartorch users express shapes in C-order (last index varies fastest in
+    memory); BART uses Fortran order (first index varies fastest).  Reversing
+    the dim list *without* touching the data switches between the two
+    conventions because a C-order ``(a, b, c)`` array and a Fortran-order
+    ``(c, b, a)`` array share identical byte layouts — zero copy.
     """
-    # Allocate in C-order then permute so the underlying storage is Fortran.
-    # torch.empty with memory_format=torch.contiguous_format is row-major;
-    # we want column-major (last dim varies slowest in memory).
-    t = torch.empty(
-        dims[::-1],  # reversed for Fortran order
-        dtype=torch.complex64,
-        device=device,
-    ).contiguous()
-    # Restore logical shape via a view with reversed strides.
-    t = t.as_strided(
-        dims,
-        _fortran_strides(dims),
-    )
-    return BartTensor(t)
+    return list(reversed(dims))
 
 
-def bart_zeros(
-    dims: list[int],
-    device: str | torch.device = "cpu",
-) -> BartTensor:
-    """Like :func:`bart_empty` but zero-initialised."""
-    t = bart_empty(dims, device=device)
-    t.zero_()
-    return t
+def _normalise_input(v):
+    """Cast one argument to ``complex64 torch.Tensor`` if it is array-like.
 
-
-def bart_from_tensor(
-    t: torch.Tensor,
-    copy: bool = True,
-) -> BartTensor:
-    """Wrap or copy a ``torch.Tensor`` into a ``BartTensor``.
-
-    Parameters
-    ----------
-    t:
-        Input tensor.  Must be ``complex64``; a cast is performed otherwise.
-    copy:
-        When ``False``, attempt a zero-copy view (only possible when *t* is
-        already column-major ``complex64`` on CPU or CUDA).
-
-    Returns
-    -------
-    BartTensor
-        Fortran-order complex64 tensor sharing (or copying) *t*'s data.
+    * ``torch.Tensor``  → cast to complex64 (zero-copy if already correct)
+    * ``numpy.ndarray`` → convert to complex64 torch.Tensor
+    * anything else     → returned unchanged
     """
-    if t.dtype != torch.complex64:
-        t = t.to(torch.complex64)
+    if isinstance(v, torch.Tensor):
+        return _as_complex64(v)
+    try:
+        import numpy as np  # optional dep
 
-    expected = _fortran_strides(list(t.shape))
-    is_fortran = list(t.stride()) == expected
-
-    if copy or not is_fortran:
-        out = bart_empty(list(t.shape), device=t.device)
-        out.copy_(t)
-        return out
-
-    return BartTensor(t)
+        if isinstance(v, np.ndarray):
+            return torch.from_numpy(np.asarray(v, dtype=np.complex64))
+    except ImportError:
+        pass
+    return v
 
 
 # ---------------------------------------------------------------------------
-# Internal helpers
+# Internal stride helper (used by the CFL writer and tests)
 # ---------------------------------------------------------------------------
 
 
 def _fortran_strides(dims: list[int]) -> list[int]:
     """Compute column-major (Fortran) strides for the given shape."""
-    strides = []
+    strides: list[int] = []
     s = 1
     for d in dims:
         strides.append(s)
         s *= d
     return strides
+
+
+# ---------------------------------------------------------------------------
+# Public decorator
+# ---------------------------------------------------------------------------
+
+
+def bart_op(func=None, *, real_output: bool = False):
+    """Decorator for bartorch op functions.
+
+    Applies two transparent transformations:
+
+    **Input** — every positional or keyword argument that is a
+    ``torch.Tensor`` or ``numpy.ndarray`` is normalised to
+    ``torch.complex64`` (zero-copy passthrough when the dtype already
+    matches).
+
+    **Output** — the return value is passed through as-is (``complex64``
+    from BART).  Set *real_output=True* for ops that are semantically
+    real-valued; the decorator will then return ``result.real`` (float32).
+
+    The decorator can be used with or without arguments::
+
+        @bart_op                          # complex output (default)
+        def fft(input, flags, ...): ...
+
+        @bart_op(real_output=True)        # real output
+        def rss(coil_images, ...): ...
+
+    Parameters
+    ----------
+    func :
+        The op function to decorate.  Supplied automatically when the
+        decorator is used without parentheses (``@bart_op``).
+    real_output : bool
+        When ``True``, return ``result.real`` (float32) instead of the
+        full complex result.  Default ``False``.
+    """
+
+    def decorator(f):
+        @functools.wraps(f)
+        def wrapper(*args, **kwargs):
+            new_args = tuple(_normalise_input(a) for a in args)
+            new_kwargs = {k: _normalise_input(v) for k, v in kwargs.items()}
+            result = f(*new_args, **new_kwargs)
+            if real_output and isinstance(result, torch.Tensor):
+                return result.real
+            return result
+
+        return wrapper
+
+    # Support both @bart_op and @bart_op(real_output=True)
+    if func is not None:
+        return decorator(func)
+    return decorator

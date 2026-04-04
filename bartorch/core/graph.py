@@ -1,20 +1,21 @@
 """
-bartorch.core.graph — Operation dispatch: hot path vs. fallback.
+bartorch.core.graph — Operation dispatch via the C++ extension.
 
 ``dispatch(op_name, inputs, output_dims, **kwargs)`` is the single entry point
-used by every op in ``bartorch.ops``.  It decides at call time whether all
-inputs qualify for the zero-copy hot path or whether a fallback is needed.
+used by every op in ``bartorch.ops``.
 
-Hot-path criteria (all must hold):
-  1. Every array-valued input is a ``BartTensor`` on the same device.
-  2. The ``_bartorch_ext`` C extension has been successfully imported.
-  3. For CUDA inputs, BART must have been compiled with ``USE_CUDA``.
+bartorch requires the compiled C++ extension ``_bartorch_ext``.  The extension
+embeds BART and links to the BLAS and FFT libraries bundled with PyTorch — no
+external ``bart`` binary is needed, and no data is ever written to ``/dev/shm``
+or disk.
 
-Fallback hierarchy (first matching wins):
-  a. C++ extension hot path (direct ``bart_command`` in-process, zero copy).
-  b. FIFO-based subprocess (``bartorch.pipe``), no-disk via named pipes in
-     ``/dev/shm``.
-  c. Legacy temp-file subprocess (last resort, maintains backward compat).
+If the extension is not available a clear :exc:`ImportError` is raised with
+installation instructions.
+
+Normalisation (complex64 cast, numpy → tensor) is performed upstream by the
+:func:`~bartorch.core.tensor.bart_op` decorator applied to every op function.
+By the time ``dispatch`` is called all array inputs are guaranteed to be
+``torch.complex64`` tensors.
 """
 
 from __future__ import annotations
@@ -23,31 +24,32 @@ from typing import Any
 
 import torch
 
-from bartorch.core.tensor import BartTensor
-
-# Will be replaced by the real extension at runtime once compiled.
 _ext = None
+_ext_error: ImportError | None = None
+_ext_loaded = False
 
 
-def _try_load_ext():
-    global _ext
-    if _ext is not None:
-        return _ext
-    try:
-        import _bartorch_ext as ext  # noqa: F401  (C++ extension)
+def _get_ext():
+    """Return the compiled C++ extension, raising ``ImportError`` if absent."""
+    global _ext, _ext_error, _ext_loaded
+    if not _ext_loaded:
+        _ext_loaded = True
+        try:
+            import _bartorch_ext as ext  # noqa: F401
 
-        _ext = ext
-    except ImportError:
-        pass
+            _ext = ext
+        except ImportError as exc:
+            _ext_error = ImportError(
+                "bartorch requires the compiled C++ extension '_bartorch_ext'.\n"
+                "  • Build from source:            pip install -e .\n"
+                "  • Install a prebuilt wheel:     pip install bartorch\n"
+                "The extension embeds BART and does not require an external 'bart' "
+                "binary on $PATH."
+            )
+            _ext_error.__cause__ = exc
+    if _ext is None:
+        raise _ext_error
     return _ext
-
-
-def _all_bart_tensors(*args) -> bool:
-    """Return True if every tensor-like arg is a BartTensor."""
-    for a in args:
-        if isinstance(a, torch.Tensor) and not isinstance(a, BartTensor):
-            return False
-    return True
 
 
 def dispatch(
@@ -55,80 +57,31 @@ def dispatch(
     inputs: list[Any],
     output_dims: list[int] | None,
     **kwargs,
-) -> BartTensor | tuple[BartTensor, ...]:
-    """Route *op_name* to the appropriate execution path.
+) -> torch.Tensor | tuple[torch.Tensor, ...]:
+    """Route *op_name* through the C++ extension.
 
     Parameters
     ----------
     op_name:
-        BART tool name (e.g. ``"fft"``, ``"pics"``).
+        BART tool name (e.g. ``"fft"``).
     inputs:
-        List of positional array inputs.  May be ``BartTensor``,
-        ``torch.Tensor``, or ``numpy.ndarray``.
+        Positional array inputs.  Must be ``torch.complex64`` tensors —
+        normalisation is performed upstream by
+        :func:`~bartorch.core.tensor.bart_op`.
     output_dims:
-        Expected output shape.  ``None`` means the shape is inferred at
-        runtime by the C++ layer.
+        Expected output shape, or ``None`` to infer at runtime.
     **kwargs:
         Flag / scalar arguments forwarded to the BART command string.
 
     Returns
     -------
-    BartTensor or tuple of BartTensor
-        Operation result(s).
+    torch.Tensor or tuple of torch.Tensor
+        Operation result(s) as plain ``complex64`` tensors in C-order.
+
+    Raises
+    ------
+    ImportError
+        If the ``_bartorch_ext`` C++ extension has not been built.
     """
-    ext = _try_load_ext()
-
-    # ------------------------------------------------------------------ #
-    # Path A: C++ hot path                                                #
-    # ------------------------------------------------------------------ #
-    if ext is not None and _all_bart_tensors(*inputs):
-        return _hot_path(ext, op_name, inputs, output_dims, **kwargs)
-
-    # ------------------------------------------------------------------ #
-    # Path B: promote inputs then try hot path                            #
-    # ------------------------------------------------------------------ #
-    if ext is not None:
-        promoted = [
-            BartTensor(a)
-            if isinstance(a, torch.Tensor)
-            else _numpy_to_bart(a)
-            if _is_numpy(a)
-            else a
-            for a in inputs
-        ]
-        return _hot_path(ext, op_name, promoted, output_dims, **kwargs)
-
-    # ------------------------------------------------------------------ #
-    # Path C: subprocess fallback (CFL temp files in /dev/shm)           #
-    # ------------------------------------------------------------------ #
-    from bartorch.pipe import run_subprocess  # lazy import
-
-    return run_subprocess(op_name, inputs, output_dims, **kwargs)
-
-
-# ---------------------------------------------------------------------------
-# Internal helpers
-# ---------------------------------------------------------------------------
-
-
-def _hot_path(ext, op_name, inputs, output_dims, **kwargs):
-    """Call into the C++ extension for in-process zero-copy execution."""
+    ext = _get_ext()
     return ext.run(op_name, inputs, output_dims, kwargs)
-
-
-def _is_numpy(a) -> bool:
-    try:
-        import numpy as np
-
-        return isinstance(a, np.ndarray)
-    except ImportError:
-        return False
-
-
-def _numpy_to_bart(a) -> BartTensor:
-    import numpy as np
-
-    t = torch.from_numpy(np.asarray(a, dtype=np.complex64))
-    from bartorch.core.tensor import bart_from_tensor
-
-    return bart_from_tensor(t, copy=False)

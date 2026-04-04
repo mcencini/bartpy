@@ -54,11 +54,3 @@ Utils
    :members:
    :undoc-members:
    :show-inheritance:
-
-Pipe
-----
-
-.. automodule:: bartorch.pipe.cfl_tmp
-   :members:
-   :undoc-members:
-   :show-inheritance:

@@ -1,0 +1,35 @@
+import os
+import sys
+
+sys.path.insert(0, os.path.abspath(".."))
+
+project = "bartorch"
+author = "bartorch contributors"
+version = "0.1.0"
+release = version
+
+extensions = [
+    "sphinx.ext.autodoc",
+    "sphinx.ext.napoleon",
+    "sphinx.ext.viewcode",
+    "sphinx.ext.intersphinx",
+    "nbsphinx",
+]
+
+html_theme = "furo"
+
+intersphinx_mapping = {
+    "python": ("https://docs.python.org/3", None),
+    "numpy": ("https://numpy.org/doc/stable", None),
+    "torch": ("https://pytorch.org/docs/stable", None),
+}
+
+autodoc_typehints = "description"
+
+napoleon_google_docstring = True
+napoleon_numpy_docstring = True
+
+exclude_patterns = ["_build", "Thumbs.db", ".DS_Store"]
+
+templates_path = ["_templates"]
+html_static_path = ["_static"]

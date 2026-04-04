@@ -1,6 +1,7 @@
 """Phantom / simulation — bartorch.ops.phantom."""
 
 from __future__ import annotations
+
 from typing import Literal
 
 from bartorch.core.graph import dispatch

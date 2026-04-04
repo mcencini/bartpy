@@ -8,11 +8,7 @@ Returns NumPy arrays (not BartTensors); use
 
 from __future__ import annotations
 
-import os
-import re
-
 import numpy as np
-
 
 _BART_DIMS = 16
 
@@ -25,7 +21,7 @@ def readcfl(name: str) -> np.ndarray:
     """
     # Read header
     with open(name + ".hdr") as f:
-        lines = [l.strip() for l in f if not l.startswith("#")]
+        lines = [ln.strip() for ln in f if not ln.startswith("#")]
     dims = [int(x) for x in lines[0].split()]
 
     # Strip trailing 1s
@@ -36,10 +32,7 @@ def readcfl(name: str) -> np.ndarray:
     arr = np.fromfile(name + ".cfl", dtype=np.complex64)
 
     if arr.size != n:
-        raise ValueError(
-            f"CFL data size mismatch: header says {n} elements, "
-            f"file has {arr.size}."
-        )
+        raise ValueError(f"CFL data size mismatch: header says {n} elements, file has {arr.size}.")
 
     return arr.reshape(dims, order="F")
 
@@ -59,4 +52,4 @@ def writecfl(name: str, array: np.ndarray) -> None:
         f.write("# Dimensions\n")
         f.write(" ".join(str(d) for d in padded) + "\n")
 
-    np.asarray(array, dtype=np.complex64).ravel(order='F').tofile(name + ".cfl")
+    np.asarray(array, dtype=np.complex64).ravel(order="F").tofile(name + ".cfl")

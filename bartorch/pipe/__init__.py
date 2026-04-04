@@ -33,7 +33,7 @@ Platform notes
   expected to work; use the C++ extension.
 """
 
-from bartorch.pipe.cfl_tmp import run_subprocess, write_cfl_tmp, read_cfl_tmp
+from bartorch.pipe.cfl_tmp import read_cfl_tmp, run_subprocess, write_cfl_tmp
 
 # Keep old names exported for backward compat with any direct imports
 run_fifo = run_subprocess

@@ -529,4 +529,115 @@ around BART 0.9.x; it is used only for future streaming/pipeline features.
 
 ---
 
+## 11. BART Linop & Feature Inventory (Source Inspection, BART v1.0.00)
+
+This section documents which MRI-relevant linear operators and tools are
+already implemented in BART and their exposure status in bartorch.
+
+### 11.1 Cartesian SENSE
+
+| Aspect | Detail |
+|---|---|
+| Source | `src/sense/model.c`, `src/sense/model.h` |
+| C API | `sense_init()`, `maps_create()`, `maps2_create()`, `linop_sampling_create()` |
+| Tools | `itsense`, `pocsense` |
+| Bartorch | Via `pics()` tool; not yet exposed as a Python-side linop |
+
+### 11.2 Non-Cartesian SENSE (NuFFT-based)
+
+| Aspect | Detail |
+|---|---|
+| Source | `src/noncart/nufft.c`, `src/noncart/nufft_chain.c`, `src/sense/modelnc.c` |
+| C API | `nufft_create()`, `nufft_create2()`, `sense_nc_init()` (header: `noncart/nufft.h`, `sense/modelnc.h`) |
+| Config | `struct nufft_conf_s` — width, oversamp, pcycle, etc. |
+| Tools | `nufft`, `nlinv`, `pics` (non-Cartesian mode) |
+| Bartorch | Not yet directly wrapped; accessible via tool wrappers |
+
+### 11.3 Time Segmentation for B0 Off-Resonance Correction
+
+| Aspect | Detail |
+|---|---|
+| Source | `src/simu/tsegf.c`, `src/simu/tsegf.h` |
+| C API | `tse()`, `tse_der()`, `tse_adj()` — analytical phase accumulation |
+| Tools | Used in MOBA model-based reconstruction |
+| Bartorch | ❌ Not yet exposed — Phase 3+ target |
+
+### 11.4 Low-Rank Subspace / Casorati Operator
+
+| Aspect | Detail |
+|---|---|
+| Source | `src/linops/casorati.c/.h`, `src/lowrank/lrthresh.c/.h`, `src/lowrank/svthresh.c/.h`, `src/lowrank/batchsvd.c` |
+| C API | `linop_casorati_create()`, `lrthresh_create()`, `svthresh()`, `nuclearnorm()` |
+| Notes | `lrthresh_create()` returns `operator_p_s*` (proximal op), not `linop_s*` |
+| Tools | `llr`, `pics -L` |
+| Bartorch | ❌ Not yet exposed — Phase 3+ target |
+
+### 11.5 Wave-CAIPI / Wave Shuffling
+
+| Aspect | Detail |
+|---|---|
+| Source | `src/linops/waveop.c/.h` |
+| C API | `linop_wavelet_create()` — Haar, Daubechies-2, CDF-4/4 wavelet types |
+| Tools | `wave` |
+| Bartorch | ❌ Not yet exposed — Phase 3+ target |
+
+### 11.6 Sensitivity Calibration (already exposed)
+
+| Op | Source | C API | Tool | Bartorch |
+|---|---|---|---|---|
+| ESPIRiT | `src/calib/calib.c/.h` | `calib()`, `calib2()`, `struct ecalib_conf` | `ecalib` | ✅ `bartorch.ops.pics.ecalib()` |
+| Direct | `src/calib/direct.c/.h` | `direct_calib()` | `caldir` | ✅ `bartorch.ops.pics.caldir()` |
+| PICS | `src/pics.c` | Composite | `pics` | ✅ `bartorch.ops.pics.pics()` |
+
+### 11.7 Linop Framework (already partially exposed)
+
+| Op | C API (`linops/linop.h`) | Bartorch |
+|---|---|---|
+| Chain | `linop_chain()`, `linop_chainN()`, `linop_chain_FF()` | ⚠️ stub in `ops.linops` |
+| Plus | `linop_plus()`, `linop_plus_FF()` | ⚠️ stub |
+| Stack | `linop_stack()`, `linop_stack_cod()` | ⚠️ stub |
+| Pseudo-inverse | `linop_pseudo_inv()` | ⚠️ stub |
+| Normal equations | `linop_normal()`, `linop_norm_inv_unchecked()` | ⚠️ stub |
+| Get normal op | `linop_get_normal()` | ⚠️ stub |
+
+### 11.8 Other Linops Not Yet Exposed (Priority Order)
+
+The following are implemented in BART and should be exposed in Phase 2–3:
+
+| Linop | Source | C API | Notes |
+|---|---|---|---|
+| **NUFFT** | `src/noncart/nufft.c` | `nufft_create()` | Non-Cartesian k-space encoding |
+| **Gradient/TV** | `src/linops/grad.c/.h` | `linop_grad_create()`, `linop_grad_forward_create()` | Finite differences for TV regularization |
+| **Wavelet** | `src/linops/waveop.c/.h` | `linop_wavelet_create()` | Wavelet regularization |
+| **FFT (linop)** | `src/linops/someops.c/.h` | `linop_fft_create()`, `linop_fftc_create()` | Cartesian FFT |
+| **Diagonal** | `src/linops/someops.c/.h` | `linop_cdiag_create()`, `linop_rdiag_create()` | Coil sensitivity multiplication |
+| **Reshape** | `src/linops/someops.c/.h` | `linop_reshape_create()`, `linop_permute_create()` | Tensor manipulation |
+| **Slice / Extract** | `src/linops/someops.c/.h` | `linop_extract_create()`, `linop_slice_create()` | Subspace/patch extraction |
+| **Sum / Repmat** | `src/linops/sum.c/.h` | `linop_sum_create()`, `linop_avg_create()`, `linop_repmat_create()` | Coil combining / replication |
+| **Casorati** | `src/linops/casorati.c/.h` | `linop_casorati_create()` | Subspace via matricization |
+| **Motion Interp** | `src/motion/interpolate.c/.h` | `linop_interpolate_create()` | Image registration / motion correction |
+| **Low-rank thresh** | `src/lowrank/lrthresh.c/.h` | `lrthresh_create()` — returns `operator_p_s*` | Proximal operator, not linop |
+| **B0 time seg** | `src/simu/tsegf.c/.h` | `tse()` | Off-resonance correction |
+
+### 11.9 Priority Recommendations
+
+**Phase 2 priorities** (most commonly needed for custom algorithms):
+1. `nufft_create()` — Non-Cartesian encoding, essential for non-Cartesian MRI
+2. `linop_grad_create()` — Required to build TV regularization from scratch
+3. `linop_fft_create()` / `linop_fftc_create()` — Cartesian FFT as linop
+4. `linop_cdiag_create()` — Coil sensitivity encoding
+
+**Phase 3 priorities** (advanced custom algorithms):
+5. `sense_nc_init()` / `maps_create()` — Full Cartesian/non-Cartesian SENSE linop
+6. `linop_casorati_create()` — Subspace projection, GRASP, XD-GRASP
+7. `lrthresh_create()` — Low-rank regularization (proximal op)
+8. `linop_wavelet_create()` — Wavelet regularization
+
+**Phase 4+ (specialised):**
+9. `tse()` — Time segmentation for B0 correction (MOBA-style)
+10. Wave-CAIPI (`linop_wavelet_create()` + k-space pattern)
+11. Motion operators (`linop_interpolate_create()`)
+
+---
+
 *End of agents.md*

@@ -45,9 +45,11 @@ class BartTensor(torch.Tensor):
         return instance
 
     def __repr__(self):
-        return f"BartTensor(shape={tuple(self.shape)}, " \
-               f"dtype={self.dtype}, device={self.device}, " \
-               f"bart_name={self._bart_name!r})"
+        return (
+            f"BartTensor(shape={tuple(self.shape)}, "
+            f"dtype={self.dtype}, device={self.device}, "
+            f"bart_name={self._bart_name!r})"
+        )
 
     @classmethod
     def __torch_function__(cls, func, types, args=(), kwargs=None):
@@ -62,6 +64,7 @@ class BartTensor(torch.Tensor):
 # ---------------------------------------------------------------------------
 # Factory helpers
 # ---------------------------------------------------------------------------
+
 
 def bart_empty(
     dims: list[int],
@@ -131,7 +134,7 @@ def bart_from_tensor(
         t = t.to(torch.complex64)
 
     expected = _fortran_strides(list(t.shape))
-    is_fortran = (list(t.stride()) == expected)
+    is_fortran = list(t.stride()) == expected
 
     if copy or not is_fortran:
         out = bart_empty(list(t.shape), device=t.device)
@@ -144,6 +147,7 @@ def bart_from_tensor(
 # ---------------------------------------------------------------------------
 # Internal helpers
 # ---------------------------------------------------------------------------
+
 
 def _fortran_strides(dims: list[int]) -> list[int]:
     """Compute column-major (Fortran) strides for the given shape."""

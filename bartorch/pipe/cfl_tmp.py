@@ -38,7 +38,6 @@ import torch
 
 from bartorch.core.tensor import BartTensor, bart_from_tensor
 
-
 # ---------------------------------------------------------------------------
 # Temp-directory selection
 # ---------------------------------------------------------------------------
@@ -73,6 +72,7 @@ def _unique_base(prefix: str = "_bt_") -> str:
 # circular imports at runtime before the package is fully installed)
 # ---------------------------------------------------------------------------
 
+
 def _write_cfl_pair(base: str, array: np.ndarray) -> None:
     """Write *array* as a CFL pair at *base* + ``.hdr`` / ``.cfl``."""
     array = np.asarray(array, dtype=np.complex64)
@@ -88,6 +88,7 @@ def _write_cfl_pair(base: str, array: np.ndarray) -> None:
 
 def _read_cfl_pair(base: str) -> np.ndarray:
     """Read a CFL pair written by BART and return a Fortran-order complex64 array."""
+    dims: list[int] = [1]
     with open(base + ".hdr") as f:
         for line in f:
             line = line.strip()
@@ -97,16 +98,13 @@ def _read_cfl_pair(base: str) -> np.ndarray:
             while dims and dims[-1] == 1:
                 dims.pop()
             break
-    else:
-        dims = [1]
 
     n = int(np.prod(dims)) if dims else 1
     arr = np.fromfile(base + ".cfl", dtype=np.complex64)
 
     if arr.size != n:
         raise RuntimeError(
-            f"CFL size mismatch reading {base!r}: "
-            f"header says {n} elements, file has {arr.size}."
+            f"CFL size mismatch reading {base!r}: header says {n} elements, file has {arr.size}."
         )
 
     return arr.reshape(dims, order="F")
@@ -122,6 +120,7 @@ def _safe_unlink(path: str) -> None:
 # ---------------------------------------------------------------------------
 # Context managers for individual input / output CFL scratch files
 # ---------------------------------------------------------------------------
+
 
 @contextmanager
 def write_cfl_tmp(
@@ -191,6 +190,7 @@ def read_cfl_tmp(
 # Main dispatch entry point
 # ---------------------------------------------------------------------------
 
+
 def run_subprocess(
     op_name: str,
     inputs: list[Any],
@@ -256,21 +256,19 @@ def run_subprocess(
         ret = subprocess.call(argv)
         if ret != 0:
             raise RuntimeError(
-                f"bart {op_name!r} subprocess exited with code {ret}.\n"
-                f"Command: {' '.join(argv)}"
+                f"bart {op_name!r} subprocess exited with code {ret}.\nCommand: {' '.join(argv)}"
             )
 
     out = result_holder[0]
     if out is None:
-        raise RuntimeError(
-            f"bart {op_name!r}: no output file was produced at {out_base!r}."
-        )
+        raise RuntimeError(f"bart {op_name!r}: no output file was produced at {out_base!r}.")
     return out
 
 
 # ---------------------------------------------------------------------------
 # Argv helpers
 # ---------------------------------------------------------------------------
+
 
 def _flags_to_argv(kwargs: dict) -> list[str]:
     """Convert keyword arguments to BART flag strings.

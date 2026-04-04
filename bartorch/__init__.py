@@ -17,7 +17,7 @@ Architecture
 See ``agents.md`` for the full design and roadmap.
 """
 
-from importlib.metadata import version, PackageNotFoundError
+from importlib.metadata import PackageNotFoundError, version
 
 try:
     __version__ = version("bartorch")

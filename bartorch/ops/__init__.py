@@ -44,21 +44,42 @@ See agents.md for the full implementation roadmap.
 """
 
 from bartorch.ops.fft import fft, ifft
-from bartorch.ops.phantom import phantom
+from bartorch.ops.italgos import chambolle_pock, conjgrad, fista, irgnm, ist
 from bartorch.ops.linops import (
-    identity, diag, fft_linop,
-    chain, plus, stack,
-    forward, adjoint, normal, pseudo_inv,
+    adjoint,
+    chain,
+    diag,
+    fft_linop,
+    forward,
+    identity,
+    normal,
+    plus,
+    pseudo_inv,
+    stack,
 )
-from bartorch.ops.pics import ecalib, caldir, pics
-from bartorch.ops.italgos import conjgrad, ist, fista, irgnm, chambolle_pock
+from bartorch.ops.phantom import phantom
+from bartorch.ops.pics import caldir, ecalib, pics
 
 __all__ = [
-    "fft", "ifft",
+    "fft",
+    "ifft",
     "phantom",
-    "identity", "diag", "fft_linop",
-    "chain", "plus", "stack",
-    "forward", "adjoint", "normal", "pseudo_inv",
-    "ecalib", "caldir", "pics",
-    "conjgrad", "ist", "fista", "irgnm", "chambolle_pock",
+    "identity",
+    "diag",
+    "fft_linop",
+    "chain",
+    "plus",
+    "stack",
+    "forward",
+    "adjoint",
+    "normal",
+    "pseudo_inv",
+    "ecalib",
+    "caldir",
+    "pics",
+    "conjgrad",
+    "ist",
+    "fista",
+    "irgnm",
+    "chambolle_pock",
 ]

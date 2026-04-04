@@ -1,6 +1,7 @@
 """Iterative algorithms — bartorch.ops.italgos."""
 
 from __future__ import annotations
+
 from bartorch.core.tensor import BartTensor
 from bartorch.ops.linops import BartLinop
 

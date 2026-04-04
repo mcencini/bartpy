@@ -6,6 +6,7 @@ tensors; apply them with forward(), adjoint(), normal(), or pseudo_inv().
 """
 
 from __future__ import annotations
+
 from dataclasses import dataclass
 from typing import Any
 
@@ -19,18 +20,19 @@ class BartLinop:
     The underlying C pointer is stored as a Python ``int`` (address) once the
     C++ extension is available.  At stub stage this is ``None``.
     """
+
     _ptr: Any = None
     src_dims: list[int] | None = None
     dst_dims: list[int] | None = None
 
     def __repr__(self):
-        return (f"BartLinop(src={self.src_dims}, dst={self.dst_dims}, "
-                f"ptr={self._ptr})")
+        return f"BartLinop(src={self.src_dims}, dst={self.dst_dims}, ptr={self._ptr})"
 
 
 # ---------------------------------------------------------------------------
 # Linop constructors
 # ---------------------------------------------------------------------------
+
 
 def identity(dims: list[int]) -> BartLinop:
     """Identity operator."""
@@ -51,6 +53,7 @@ def fft_linop(dims: list[int], flags: int) -> BartLinop:
 # Composition
 # ---------------------------------------------------------------------------
 
+
 def chain(op1: BartLinop, op2: BartLinop) -> BartLinop:
     """op2 ∘ op1 (apply op1 first, then op2)."""
     raise NotImplementedError
@@ -69,6 +72,7 @@ def stack(op1: BartLinop, op2: BartLinop) -> BartLinop:
 # ---------------------------------------------------------------------------
 # Application
 # ---------------------------------------------------------------------------
+
 
 def forward(op: BartLinop, dest_dims: list[int], src: BartTensor) -> BartTensor:
     """Apply the forward operator."""

@@ -1,7 +1,8 @@
 """Tests for bartorch.utils.cfl (NumPy CFL read/write)."""
 
-import tempfile
 import os
+import tempfile
+
 import numpy as np
 import pytest
 
@@ -10,8 +11,9 @@ from bartorch.utils.cfl import readcfl, writecfl
 
 class TestCFLRoundtrip:
     def test_2d(self):
-        arr = np.random.randn(8, 16).astype(np.complex64) + \
-              1j * np.random.randn(8, 16).astype(np.complex64)
+        arr = np.random.randn(8, 16).astype(np.complex64) + 1j * np.random.randn(8, 16).astype(
+            np.complex64
+        )
         with tempfile.TemporaryDirectory() as d:
             base = os.path.join(d, "test")
             writecfl(base, arr)
@@ -19,8 +21,7 @@ class TestCFLRoundtrip:
         np.testing.assert_array_almost_equal(arr, arr2)
 
     def test_3d(self):
-        arr = (np.random.randn(4, 8, 16) +
-               1j * np.random.randn(4, 8, 16)).astype(np.complex64)
+        arr = (np.random.randn(4, 8, 16) + 1j * np.random.randn(4, 8, 16)).astype(np.complex64)
         with tempfile.TemporaryDirectory() as d:
             base = os.path.join(d, "test3d")
             writecfl(base, arr)

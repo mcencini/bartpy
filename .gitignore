@@ -6,8 +6,6 @@ bartpy.egg-info/
 bartorch.egg-info/
 .vscode/
 
-demos/.ipynb_checkpoints/*
-
 # Compiled extensions
 *.so
 *.pyd
@@ -25,3 +23,12 @@ Makefile
 
 # Bartorch generated tools
 bartorch/tools/_generated.py
+
+# Docs build
+docs/_build/
+docs/_static/
+docs/_templates/
+
+# Attic / legacy demos
+attic/demos/.ipynb_checkpoints/
+**/.DS_Store

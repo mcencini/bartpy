@@ -1,6 +1,7 @@
 """Tests for bartorch.core.context (BartContext, bart_context)."""
 
 import pytest
+
 from bartorch.core.context import BartContext, bart_context
 
 
@@ -32,6 +33,7 @@ class TestBartContext:
 
     def test_register_unregister(self):
         import torch
+
         ctx = BartContext()
         t = torch.zeros(1)
         ctx.register("foo.mem", t)

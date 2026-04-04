@@ -31,9 +31,17 @@ classifiers = [
 dev = [
     "pytest>=7",
     "pytest-cov",
-    "black",
     "ruff",
     "mypy",
+    "pre-commit",
+    "nbstripout",
+    "codespell",
+]
+docs = [
+    "sphinx>=7.0",
+    "furo",
+    "nbsphinx",
+    "sphinx-copybutton",
 ]
 
 [tool.setuptools.packages.find]
@@ -54,7 +62,12 @@ target-version = ["py39"]
 
 [tool.ruff]
 line-length = 100
+
+[tool.ruff.lint]
 select = ["E", "F", "W", "I"]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/*" = ["F401"]
 
 [tool.mypy]
 python_version = "3.9"

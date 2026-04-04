@@ -59,4 +59,4 @@ def writecfl(name: str, array: np.ndarray) -> None:
         f.write("# Dimensions\n")
         f.write(" ".join(str(d) for d in padded) + "\n")
 
-    np.asfortranarray(array).tofile(name + ".cfl")
+    np.asarray(array, dtype=np.complex64).ravel(order='F').tofile(name + ".cfl")

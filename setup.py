@@ -1,16 +1,5 @@
-# Copyright 2021. The Regents of the University of California.
-# All rights reserved. Use of this source code is governed by
-# a BSD-style license which can be found in the LICENSE file.
-#
-# Authors:
-# 2021 Max Litster <litster@berkeley.edu>
-# 2024 bartorch contributors
-#
-# This file now serves as the CMake-based build entry point for the
-# _bartorch_ext C++ extension (PyTorch ↔ BART zero-copy bridge).
-#
-# Legacy bartpy installation (subprocess-based wrappers) is still available;
-# see bartpy/ for the original package.
+# bartorch — CMake-based build entry point for the _bartorch_ext C++ extension.
+# (PyTorch ↔ BART zero-copy bridge)
 #
 # Usage
 # -----
@@ -82,9 +71,7 @@ setup(
         "Toolbox (BART)"
     ),
     packages=["bartorch", "bartorch.core", "bartorch.ops",
-              "bartorch.pipe", "bartorch.tools", "bartorch.utils",
-              # Legacy
-              "bartpy", "bartpy.utils", "bartpy.tools", "bartpy.wrapper"],
+              "bartorch.pipe", "bartorch.tools", "bartorch.utils"],
     ext_modules=[
         CMakeExtension("_bartorch_ext", src_dir="bartorch/csrc"),
     ],

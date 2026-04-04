@@ -6,12 +6,39 @@ project(bartorch_ext LANGUAGES C CXX)
 # ---------------------------------------------------------------------------
 option(USE_CUDA "Build with CUDA support" OFF)
 option(BART_MEMONLY_CFL "Build BART with MEMONLY_CFL (all I/O in-memory)" ON)
+option(BARTORCH_SKIP_EXT "Skip building the C++ extension (pure-Python fallback)" OFF)
+
+if(DEFINED ENV{BARTORCH_SKIP_EXT} AND "$ENV{BARTORCH_SKIP_EXT}" STREQUAL "1")
+    set(BARTORCH_SKIP_EXT ON)
+endif()
+
+if(BARTORCH_SKIP_EXT)
+    message(STATUS "BARTORCH_SKIP_EXT=1 — skipping C++ extension build")
+    return()
+endif()
 
 # ---------------------------------------------------------------------------
 # Find PyTorch (libtorch)
 # ---------------------------------------------------------------------------
-# The user's PyTorch install provides libtorch, includes, and the cmake config.
-# Locate it with:  python -c "import torch; print(torch.utils.cmake_prefix_path)"
+# Auto-detect PyTorch's cmake prefix so that find_package(Torch) works without
+# requiring an explicit -DCMAKE_PREFIX_PATH from the caller (e.g. setup.py or
+# scikit-build-core).  This keeps the build self-contained: as long as torch is
+# importable in the active Python interpreter, the build succeeds.
+find_package(Python3 QUIET COMPONENTS Interpreter)
+if(Python3_FOUND AND NOT DEFINED TORCH_DIR)
+    execute_process(
+        COMMAND "${Python3_EXECUTABLE}" -c
+            "import torch; print(torch.utils.cmake_prefix_path)"
+        OUTPUT_VARIABLE _torch_cmake_prefix
+        OUTPUT_STRIP_TRAILING_WHITESPACE
+        RESULT_VARIABLE _ret
+    )
+    if(_ret EQUAL 0 AND _torch_cmake_prefix)
+        list(PREPEND CMAKE_PREFIX_PATH "${_torch_cmake_prefix}")
+        message(STATUS "Auto-detected PyTorch cmake prefix: ${_torch_cmake_prefix}")
+    endif()
+endif()
+
 find_package(Torch REQUIRED)
 set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} ${TORCH_CXX_FLAGS}")
 

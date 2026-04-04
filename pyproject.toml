@@ -1,11 +1,9 @@
 [build-system]
 requires = [
-    "setuptools>=68",
-    "wheel",
-    "cmake>=3.18",
+    "scikit-build-core>=0.9",
     "torch",        # provides libtorch + cmake config at build time
 ]
-build-backend = "setuptools.backends.legacy:build"
+build-backend = "scikit_build_core.build"
 
 [project]
 name = "bartorch"
@@ -44,17 +42,35 @@ docs = [
     "sphinx-copybutton",
 ]
 
+# ---------------------------------------------------------------------------
+# scikit-build-core — CMake extension build configuration
+# ---------------------------------------------------------------------------
+# scikit-build-core calls CMake directly; all metadata lives here in
+# pyproject.toml.  setup.py is kept only as the two-line legacy shim.
+#
+# Build variants:
+#   pip install -e .                          # CPU (default)
+#   CMAKE_ARGS="-DUSE_CUDA=ON" pip install .  # CUDA
+#   BARTORCH_SKIP_EXT=1 pip install .         # pure-Python / subprocess only
+[tool.scikit-build]
+cmake.source-dir = "bartorch/csrc"
+cmake.build-type = "Release"
+# Wheel build: only include the bartorch Python package + the compiled extension.
+wheel.packages = ["bartorch"]
+# Install the compiled extension into the bartorch package directory inside the wheel.
+wheel.install-dir = "bartorch"
+
+[tool.scikit-build.cmake.define]
+# Forward BARTORCH_SKIP_EXT env var to CMake so CMakeLists.txt can skip the
+# extension build when only the pure-Python fallback is needed.
+BARTORCH_SKIP_EXT = {env = "BARTORCH_SKIP_EXT", default = "OFF"}
+# Forward USE_CUDA so `CMAKE_ARGS="-DUSE_CUDA=ON"` still works, but the
+# cmake.define table also accepts the env var directly.
+USE_CUDA = {env = "BARTORCH_USE_CUDA", default = "OFF"}
+
 [tool.setuptools.packages.find]
 where = ["."]
 include = ["bartorch*"]
-
-# ---------------------------------------------------------------------------
-# cmake-build configuration (used by setup.py CMakeExtension)
-# ---------------------------------------------------------------------------
-[tool.cmake]
-# Additional cmake args can be passed via CMAKE_ARGS environment variable.
-# e.g.:  CMAKE_ARGS="-DUSE_CUDA=ON" pip install -e .
-build_type = "Release"
 
 [tool.black]
 line-length = 100

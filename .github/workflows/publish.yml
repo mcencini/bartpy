@@ -45,12 +45,13 @@ jobs:
           python-version: "3.11"
 
       - name: Install build tools
-        run: pip install build
+        run: pip install build scikit-build-core
 
       - name: Build sdist and wheel (pure-Python, no C++ ext)
         # Use BARTORCH_SKIP_EXT=1 to build a pure-Python wheel that works
         # without a C compiler.  The C++ extension wheel is built separately
         # via cibuildwheel (see below, currently commented out).
+        # scikit-build-core is the build backend declared in pyproject.toml.
         env:
           BARTORCH_SKIP_EXT: "1"
         run: python -m build

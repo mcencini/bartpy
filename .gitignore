@@ -26,7 +26,6 @@ bartorch/tools/_generated.py
 
 # Docs build
 docs/_build/
-docs/_static/
 docs/_templates/
 
 # Attic / legacy demos

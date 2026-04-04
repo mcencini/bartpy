@@ -128,9 +128,9 @@ bartpy/                           ← repository root
 │   │   ├── pics.py               ← ecalib(), caldir(), pics()
 │   │   └── italgos.py            ← conjgrad(), ist(), fista(), irgnm(), …
 │   │
-│   ├── pipe/                     ← FIFO subprocess fallback
+│   ├── pipe/                     ← Subprocess fallback (CFL temp files in /dev/shm)
 │   │   ├── __init__.py
-│   │   └── fifo.py               ← cfl_input_fifo, cfl_output_fifo, run_fifo
+│   │   └── cfl_tmp.py            ← write_cfl_tmp, read_cfl_tmp, run_subprocess
 │   │
 │   ├── tools/                    ← Auto-generated CLI wrappers (all 100+ tools)
 │   │   ├── __init__.py
@@ -243,40 +243,62 @@ dispatch(op_name, inputs, output_dims, **kwargs)
 
 ---
 
-## 5. FIFO Fallback — Design
+## 5. Subprocess Fallback — Design
 
-### 5.1 BART FIFO mechanics
+### 5.1 Why NOT named FIFOs
 
-BART recognises `*.fifo` suffixes as `FILE_TYPE_PIPE`.  Its `mmio` routines
-open a FIFO path with `fopen()` / `read()` / `write()` just like a regular
-file.  The CFL header (`.hdr`) is written as a separate plain text file
-alongside the FIFO.
+After inspecting BART source (``src/misc/mmio.c``, ``src/misc/stream.c``),
+the ``.fifo``-suffixed pipe mechanism turns out to be a binary streaming
+protocol, **not** a simple raw-bytes pipe:
 
-### 5.2 Implementation (`bartorch/pipe/fifo.py`)
+1. ``stream_ensure_fifo(name)`` creates the FIFO via ``mkfifo()``.
+2. The writer opens the FIFO and writes a **CFL header** (``write_stream_header``)
+   that may contain a ``# Data: <path>`` reference to a memory-mapped temp file.
+3. The stream then carries 24-byte ``stream_msg`` structs (BREAK / FLAGS /
+   BINARY / INDEX / RAW / BLOCK) to synchronise partial array writes.
+4. In "binary" mode (no data file reference) the raw data follows inline,
+   framed by sync messages.
+
+Implementing this protocol from Python would be fragile and complex.
+
+### 5.2 Chosen approach — CFL temp files in ``/dev/shm``
+
+Write standard CFL file pairs (``.hdr`` + ``.cfl``) to ``/dev/shm`` on Linux
+(a RAM-backed ``tmpfs`` — fully in-memory, no physical disk I/O) or to
+``tempfile.gettempdir()`` on other platforms.  BART's subprocess reads and
+writes these pairs using its normal CFL path (``FILE_TYPE_CFL``).
 
 ```
 For each input tensor:
   base = "/dev/shm/_bt_in_<uuid>"
-  write  base + ".hdr"          (plain text, synchronous)
-  mkfifo base + ".fifo"
-  thread: write complex64 bytes into base + ".fifo"
+  write  base + ".hdr"          (plain text Dimensions header)
+  write  base + ".cfl"          (complex64, Fortran order via ravel('F'))
 
 For each output:
   base = "/dev/shm/_bt_out_<uuid>"
-  write  base + ".hdr"          (placeholder)
-  mkfifo base + ".fifo"
-  pre-allocate BartTensor
-  thread: read complex64 bytes from base + ".fifo" into tensor
 
-subprocess.call(["bart", op_name, *flags, *input_bases, *output_bases])
+subprocess.call(["bart", op_name, *flags, *input_bases, output_base])
 
-join all threads, cleanup FIFOs, return BartTensor
+Read output:
+  read   output_base + ".hdr"   (parse dimensions)
+  read   output_base + ".cfl"   (complex64, reshape with order='F')
+  return BartTensor
+
+Cleanup: remove all .hdr / .cfl scratch files
 ```
 
 **Platform notes:**
-- Linux: `/dev/shm` (tmpfs, RAM-backed) — preferred
-- macOS: `tempfile.gettempdir()` — FIFOs are supported, but not RAM-backed
-- Windows: not supported for FIFO path (use C++ extension or WSL)
+- Linux: ``/dev/shm`` (tmpfs, RAM-backed) — preferred
+- macOS: ``tempfile.gettempdir()`` → ``/tmp`` on local SSD
+- Windows: C++ extension recommended; subprocess path writes to ``%TEMP%``
+
+### 5.3 Implementation (``bartorch/pipe/cfl_tmp.py``)
+
+``run_subprocess(op_name, inputs, output_dims, **kwargs)`` is the single entry
+point used by ``bartorch.core.graph.dispatch()`` when the C++ extension is not
+available.  ``write_cfl_tmp`` and ``read_cfl_tmp`` are context managers for
+individual input/output scratch files; ``_flags_to_argv`` converts keyword
+arguments to BART flag strings.
 
 ---
 

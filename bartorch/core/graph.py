@@ -97,10 +97,10 @@ def dispatch(
         return _hot_path(ext, op_name, promoted, output_dims, **kwargs)
 
     # ------------------------------------------------------------------ #
-    # Path C: FIFO subprocess fallback                                    #
+    # Path C: subprocess fallback (CFL temp files in /dev/shm)           #
     # ------------------------------------------------------------------ #
-    from bartorch.pipe import run_fifo  # lazy import
-    return run_fifo(op_name, inputs, output_dims, **kwargs)
+    from bartorch.pipe import run_subprocess  # lazy import
+    return run_subprocess(op_name, inputs, output_dims, **kwargs)
 
 
 # ---------------------------------------------------------------------------

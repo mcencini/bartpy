@@ -52,20 +52,21 @@ Quickstart
 
 .. code-block:: python
 
-   import bartorch.ops as ops
+   import bartorch.tools as bt
    import torch
 
    # Generate a 256×256 Shepp-Logan phantom (returns a plain torch.Tensor)
-   ph = ops.phantom([256, 256])
+   ph = bt.phantom([256, 256])
    print("Phantom type: ", type(ph))    # torch.Tensor
    print("Phantom dtype:", ph.dtype)    # torch.complex64
    print("Phantom shape:", ph.shape)    # (1, 256, 256) — coils first
 
-   # 2-D FFT (flags=3 → dims 0 and 1 in C-order, i.e. ny and nx)
-   kspace = ops.fft(ph, flags=3)
+   # 2-D FFT using C-order axis indices (no raw bitmask needed)
+   kspace = bt.fft(ph, axes=(-1, -2))
 
    # Linear operator algebra (Phase 3+)
-   # A = ops.sense_op(sens)             # BartLinop: image → k-space
+   # from bartorch.ops import BartLinop
+   # A = BartLinop(...)                 # BartLinop: image → k-space
    # AH = A.H                           # adjoint
    # AHA = A.N                          # normal operator A^H A
    # B = 2.0 * A                        # scalar multiplication

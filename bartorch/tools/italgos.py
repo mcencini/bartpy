@@ -1,12 +1,11 @@
-"""Iterative algorithms — bartorch.ops.italgos.
+"""Iterative algorithm tools — bartorch.tools.italgos.
 
-Wraps BART's iterative solvers and proximal algorithms from
-``src/iter/``.  All functions accept :class:`~bartorch.ops.linops.BartLinop`
-operators and plain ``torch.Tensor`` data vectors.  Input tensors are
-normalised automatically by the :func:`~bartorch.core.tensor.bart_op`
-decorator.
+Wraps BART's iterative solvers and proximal algorithms from ``src/iter/``.
+All functions accept :class:`~bartorch.ops.linops.BartLinop` operators and
+plain ``torch.Tensor`` data vectors.  Input tensors are normalised
+automatically by the :func:`~bartorch.core.tensor.bart_op` decorator.
 
-These are currently stubs pending the C++ extension (Phase 5).
+These are stubs pending the C++ extension (Phase 5).
 
 Module exports
 --------------

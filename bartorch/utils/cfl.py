@@ -1,9 +1,8 @@
 """
 bartorch.utils.cfl — NumPy-compatible CFL read/write.
 
-Kept for compatibility with scripts that use the legacy bartpy CFL API.
-Returns NumPy arrays (not BartTensors); use
-:func:`bartorch.core.tensor.bart_from_tensor` to convert if needed.
+Provides :func:`readcfl` and :func:`writecfl` for exchanging data with BART
+CFL file pairs (``.hdr`` + ``.cfl``) from Python/NumPy code.
 """
 
 from __future__ import annotations

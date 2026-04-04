@@ -22,7 +22,7 @@ jobs:
           cache: pip
 
       - name: Install dependencies
-        run: pip install numpy torch pytest
+        run: pip install numpy torch pytest scikit-build-core
 
       - name: Install package
         run: BARTORCH_SKIP_EXT=1 pip install -e . --no-build-isolation

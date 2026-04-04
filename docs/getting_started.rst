@@ -10,9 +10,22 @@ Introduction
 It provides:
 
 - **Zero-copy** tensor ↔ BART data exchange via shared memory (no serialisation)
+- **Plain** ``torch.Tensor`` API — no user-visible wrapper subclass
 - **DSL hot path** — pure-bartorch call chains execute entirely in C
 - **Full PyTorch citizen** — ops integrate with ``torch.autograd``, ``torch.compile``,
   CUDA streams, and DDP
+
+Axis convention
+---------------
+
+bartorch uses **C-order** (last index varies fastest), matching NumPy and PyTorch:
+
+.. code-block:: text
+
+    bartorch shape: (coils, phase2, phase1, read)   ← C-order
+    BART internal:  (read,  phase1, phase2, coils)  ← Fortran-order
+
+The axis reversal is handled transparently at the C++ boundary — no data copy.
 
 Installation
 ------------
@@ -40,20 +53,25 @@ Quickstart
 
 .. code-block:: python
 
-   import bartorch as bt
    import bartorch.ops as ops
+   import torch
 
-   # Generate a 256×256 Shepp-Logan phantom (returns a BartTensor)
+   # Generate a 256×256 Shepp-Logan phantom (returns a plain torch.Tensor)
    ph = ops.phantom([256, 256])
-   print("Phantom shape:", ph.shape)   # torch.Size([256, 256])
+   print("Phantom type: ", type(ph))    # torch.Tensor
+   print("Phantom dtype:", ph.dtype)    # torch.complex64
+   print("Phantom shape:", ph.shape)    # (1, 256, 256) — coils first
 
-   # 2-D FFT (flags=3 → dims 0 and 1)
+   # 2-D FFT (flags=3 → dims 0 and 1 in C-order, i.e. ny and nx)
    kspace = ops.fft(ph, flags=3)
-   print("k-space shape:", kspace.shape)
 
-   # Compressed-sensing reconstruction with PICS
-   # (requires coil sensitivity maps — see docs/examples/ for a full demo)
-   # recon = ops.pics(kspace, sens, l=0.001)
+   # Linear operator algebra (Phase 3+)
+   # A = ops.sense_op(sens)             # BartLinop: image → k-space
+   # AH = A.H                           # adjoint
+   # AHA = A.N                          # normal operator A^H A
+   # B = 2.0 * A                        # scalar multiplication
+   # C = A @ ops.wavelet_op(A.ishape)   # operator composition
+   # y = A(x)                           # forward application
 
 Hot path vs subprocess fallback
 --------------------------------

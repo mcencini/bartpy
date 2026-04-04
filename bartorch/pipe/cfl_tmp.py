@@ -5,21 +5,25 @@ BART subprocess calls receive inputs and emit outputs as standard CFL file
 pairs (``.hdr`` + ``.cfl``) written to ``/dev/shm`` (Linux tmpfs, RAM-backed)
 or ``tempfile.gettempdir()`` elsewhere.  No FIFOs, no streaming protocol.
 
+Axis convention
+---------------
+bartorch users pass data in C-order (last index varies fastest); BART expects
+Fortran-order CFL (first index varies fastest).  The zero-copy trick:
+
+  C-order ``(coils, ny, nx)`` bytes ≡ Fortran-order ``(nx, ny, coils)`` bytes.
+
+So we write raw C-order bytes to the ``.cfl`` file and reverse the dims in the
+``.hdr`` file.  BART sees a valid Fortran ``(nx, ny, coils)`` array without any
+data movement.  On the way back, we read raw bytes and reshape with reversed
+header dims to recover the user's C-order shape.
+
 Key reason FIFOs are NOT used
 ------------------------------
 Inspecting ``src/misc/mmio.c`` and ``src/misc/stream.c`` in the BART source
 tree reveals that ``.fifo``-suffixed paths trigger the full binary streaming
-protocol:
-
-  1. ``stream_ensure_fifo(name)`` creates the FIFO via ``mkfifo()``.
-  2. The writer opens the FIFO, writes a CFL header (``write_stream_header``),
-     then sends ``stream_msg`` structs (24-byte headers + data blocks).
-  3. The actual data backing is a memory-mapped temp file whose path is
-     embedded in the CFL header.  In "binary" mode the data follows inline in
-     the stream, protected by sync messages.
-
-Implementing this protocol in Python would be fragile.  Using plain CFL pairs
-on ``/dev/shm`` is simpler, equally fast (RAM-backed), and 100% correct.
+protocol (``stream_msg`` structs + temp file backing).  Implementing this
+protocol in Python would be fragile.  Using plain CFL pairs on ``/dev/shm`` is
+simpler, equally fast (RAM-backed), and 100% correct.
 """
 
 from __future__ import annotations
@@ -36,7 +40,7 @@ from typing import Any, Generator
 import numpy as np
 import torch
 
-from bartorch.core.tensor import BartTensor, bart_from_tensor
+from bartorch.core.tensor import as_complex64
 
 # ---------------------------------------------------------------------------
 # Temp-directory selection
@@ -68,38 +72,52 @@ def _unique_base(prefix: str = "_bt_") -> str:
 
 
 # ---------------------------------------------------------------------------
-# CFL helpers  (subset of bartorch.utils.cfl, reproduced here to avoid
-# circular imports at runtime before the package is fully installed)
+# CFL helpers
 # ---------------------------------------------------------------------------
 
 
-def _write_cfl_pair(base: str, array: np.ndarray) -> None:
-    """Write *array* as a CFL pair at *base* + ``.hdr`` / ``.cfl``."""
-    array = np.asarray(array, dtype=np.complex64)
-    dims = list(array.shape)
-    padded = dims + [1] * (_BART_DIMS - len(dims))
+def _write_cfl_pair(base: str, tensor: np.ndarray) -> None:
+    """Write *tensor* as a CFL pair at *base* + ``.hdr`` / ``.cfl``.
+
+    The tensor is expected in C-order (bartorch convention).  The ``.hdr``
+    file records the reversed (Fortran) dims so BART reads the data correctly.
+    The ``.cfl`` file contains the raw C-order bytes — identical to the bytes
+    BART would read as Fortran-order for the reversed dims.
+    """
+    array = np.asarray(tensor, dtype=np.complex64)
+    # Reversed dims: bartorch (coils, ny, nx) → BART header (nx, ny, coils)
+    bart_dims = list(reversed(array.shape))
+    padded = bart_dims + [1] * (_BART_DIMS - len(bart_dims))
 
     with open(base + ".hdr", "w") as f:
         f.write("# Dimensions\n")
         f.write(" ".join(str(d) for d in padded) + "\n")
 
-    array.ravel(order="F").tofile(base + ".cfl")
+    # Write raw C-order bytes (same layout as BART's Fortran for reversed dims).
+    # np.ascontiguousarray returns the same object when already C-contiguous.
+    np.ascontiguousarray(array).tofile(base + ".cfl")
 
 
 def _read_cfl_pair(base: str) -> np.ndarray:
-    """Read a CFL pair written by BART and return a Fortran-order complex64 array."""
-    dims: list[int] = [1]
+    """Read a CFL pair written by BART and return a C-order array.
+
+    BART writes data in Fortran order for the dims in the header (e.g.
+    ``(nx, ny, coils)``).  We reverse those dims to get the bartorch C-order
+    shape ``(coils, ny, nx)`` and reshape the raw bytes accordingly — the
+    byte order is already correct, no copy required.
+    """
+    bart_dims: list[int] = [1]
     with open(base + ".hdr") as f:
         for line in f:
             line = line.strip()
             if line.startswith("#"):
                 continue
-            dims = [int(x) for x in line.split()]
-            while dims and dims[-1] == 1:
-                dims.pop()
+            bart_dims = [int(x) for x in line.split()]
+            while bart_dims and bart_dims[-1] == 1:
+                bart_dims.pop()
             break
 
-    n = int(np.prod(dims)) if dims else 1
+    n = int(np.prod(bart_dims)) if bart_dims else 1
     arr = np.fromfile(base + ".cfl", dtype=np.complex64)
 
     if arr.size != n:
@@ -107,7 +125,9 @@ def _read_cfl_pair(base: str) -> np.ndarray:
             f"CFL size mismatch reading {base!r}: header says {n} elements, file has {arr.size}."
         )
 
-    return arr.reshape(dims, order="F")
+    # Reversed dims: BART header (nx, ny, coils) → bartorch (coils, ny, nx)
+    user_dims = list(reversed(bart_dims))
+    return arr.reshape(user_dims)  # default C-order reshape
 
 
 def _safe_unlink(path: str) -> None:
@@ -128,12 +148,14 @@ def write_cfl_tmp(
 ) -> Generator[str, None, None]:
     """Write *tensor* to a scratch CFL pair in ``/dev/shm`` and yield the base path.
 
-    The files are removed when the context exits.
+    The ``.hdr`` carries reversed dims; the ``.cfl`` holds raw C-order bytes.
+    Both files are removed when the context exits.
 
     Parameters
     ----------
     tensor:
-        Input array.  Converted to ``complex64`` if necessary.
+        Input array in C-order (bartorch convention).  Converted to
+        ``complex64`` if necessary.
 
     Yields
     ------
@@ -142,9 +164,9 @@ def write_cfl_tmp(
     """
     base = _unique_base("_bt_in_")
     if isinstance(tensor, torch.Tensor):
-        arr = tensor.detach().cpu().numpy()
+        arr = as_complex64(tensor).detach().cpu().numpy()
     else:
-        arr = np.asarray(tensor)
+        arr = np.asarray(tensor, dtype=np.complex64)
     _write_cfl_pair(base, arr)
     try:
         yield base
@@ -156,31 +178,31 @@ def write_cfl_tmp(
 @contextmanager
 def read_cfl_tmp(
     device: str | torch.device = "cpu",
-) -> Generator[tuple[str, BartTensor | None], None, None]:
-    """Reserve an output CFL slot in ``/dev/shm`` and yield ``(base, result_holder)``.
+) -> Generator[tuple[str, list], None, None]:
+    """Reserve an output CFL slot in ``/dev/shm`` and yield ``(base, result)``.
 
     After the context body executes, reads the CFL pair written by BART into a
-    ``BartTensor`` and stores it in ``result_holder[0]``.
+    plain ``torch.Tensor`` (complex64, C-order) and stores it in
+    ``result[0]``.
 
     Parameters
     ----------
     device:
-        Target device for the output ``BartTensor``.
+        Target device for the output tensor.
 
     Yields
     ------
     tuple[str, list]
-        ``(base_path, result_list)`` — append the output tensor to
-        ``result_list`` after the BART call, or read ``result_list[0]``.
+        ``(base_path, result_list)`` — read ``result_list[0]`` after the
+        context exits.
     """
     base = _unique_base("_bt_out_")
-    result: list[BartTensor | None] = [None]
+    result: list[torch.Tensor | None] = [None]
     try:
         yield base, result
-        # Read output written by BART
         arr = _read_cfl_pair(base)
-        t = torch.from_numpy(arr.copy())
-        result[0] = bart_from_tensor(t, copy=False)
+        t = torch.from_numpy(arr.copy()).to(device)
+        result[0] = as_complex64(t)
     finally:
         _safe_unlink(base + ".hdr")
         _safe_unlink(base + ".cfl")
@@ -196,7 +218,7 @@ def run_subprocess(
     inputs: list[Any],
     output_dims: list[int] | None,
     **kwargs,
-) -> BartTensor:
+) -> torch.Tensor:
     """Run a BART tool as a subprocess, passing data via CFL files in ``/dev/shm``.
 
     Inputs are written as ``.hdr`` + ``.cfl`` pairs to ``/dev/shm`` (or the OS
@@ -218,8 +240,8 @@ def run_subprocess(
 
     Returns
     -------
-    BartTensor
-        Output data read from the CFL file written by BART.
+    torch.Tensor
+        Output data as a plain complex64 C-order tensor.
 
     Raises
     ------

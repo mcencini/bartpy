@@ -2,19 +2,20 @@
 bartorch.core.graph — Operation dispatch: hot path vs. fallback.
 
 ``dispatch(op_name, inputs, output_dims, **kwargs)`` is the single entry point
-used by every op in ``bartorch.ops``.  It decides at call time whether all
-inputs qualify for the zero-copy hot path or whether a fallback is needed.
+used by every op in ``bartorch.ops``.  All inputs and outputs are plain
+``torch.Tensor`` objects (``dtype=torch.complex64``).
 
-Hot-path criteria (all must hold):
-  1. Every array-valued input is a ``BartTensor`` on the same device.
-  2. The ``_bartorch_ext`` C extension has been successfully imported.
-  3. For CUDA inputs, BART must have been compiled with ``USE_CUDA``.
+Dispatch hierarchy (first matching path wins):
 
-Fallback hierarchy (first matching wins):
-  a. C++ extension hot path (direct ``bart_command`` in-process, zero copy).
-  b. FIFO-based subprocess (``bartorch.pipe``), no-disk via named pipes in
-     ``/dev/shm``.
-  c. Legacy temp-file subprocess (last resort, maintains backward compat).
+  a. **Hot path** — C++ extension available: ``_bartorch_ext.run()`` calls
+     ``bart_command()`` in-process, registering each tensor's ``data_ptr()``
+     directly in BART's in-memory CFL registry.  Zero copies; axis reversal
+     is handled transparently inside the bridge.
+
+  b. **Subprocess fallback** — C++ extension absent: ``bartorch.pipe``
+     writes CFL file pairs to ``/dev/shm`` and spawns a ``bart`` subprocess.
+     CFL headers carry reversed dims; raw bytes are written in C-order (same
+     layout as BART's Fortran order for the reversed dims).
 """
 
 from __future__ import annotations
@@ -23,7 +24,7 @@ from typing import Any
 
 import torch
 
-from bartorch.core.tensor import BartTensor
+from bartorch.core.tensor import as_complex64
 
 # Will be replaced by the real extension at runtime once compiled.
 _ext = None
@@ -42,20 +43,12 @@ def _try_load_ext():
     return _ext
 
 
-def _all_bart_tensors(*args) -> bool:
-    """Return True if every tensor-like arg is a BartTensor."""
-    for a in args:
-        if isinstance(a, torch.Tensor) and not isinstance(a, BartTensor):
-            return False
-    return True
-
-
 def dispatch(
     op_name: str,
     inputs: list[Any],
     output_dims: list[int] | None,
     **kwargs,
-) -> BartTensor | tuple[BartTensor, ...]:
+) -> torch.Tensor | tuple[torch.Tensor, ...]:
     """Route *op_name* to the appropriate execution path.
 
     Parameters
@@ -63,47 +56,45 @@ def dispatch(
     op_name:
         BART tool name (e.g. ``"fft"``, ``"pics"``).
     inputs:
-        List of positional array inputs.  May be ``BartTensor``,
-        ``torch.Tensor``, or ``numpy.ndarray``.
+        List of positional array inputs.  May be ``torch.Tensor`` (any dtype,
+        cast to complex64 automatically) or ``numpy.ndarray``.
     output_dims:
-        Expected output shape.  ``None`` means the shape is inferred at
-        runtime by the C++ layer.
+        Expected output shape, or ``None`` when the shape is inferred at
+        runtime by the C++ layer or from the CFL header.
     **kwargs:
         Flag / scalar arguments forwarded to the BART command string.
 
     Returns
     -------
-    BartTensor or tuple of BartTensor
-        Operation result(s).
+    torch.Tensor or tuple of torch.Tensor
+        Operation result(s) as plain complex64 tensors in C-order.
     """
     ext = _try_load_ext()
 
     # ------------------------------------------------------------------ #
+    # Normalise inputs to complex64 torch.Tensor                          #
+    # ------------------------------------------------------------------ #
+    normalised: list[Any] = []
+    for a in inputs:
+        if isinstance(a, torch.Tensor):
+            normalised.append(as_complex64(a))
+        elif _is_numpy(a):
+            normalised.append(as_complex64(_numpy_to_tensor(a)))
+        else:
+            normalised.append(a)
+
+    # ------------------------------------------------------------------ #
     # Path A: C++ hot path                                                #
     # ------------------------------------------------------------------ #
-    if ext is not None and _all_bart_tensors(*inputs):
-        return _hot_path(ext, op_name, inputs, output_dims, **kwargs)
-
-    # ------------------------------------------------------------------ #
-    # Path B: promote inputs then try hot path                            #
-    # ------------------------------------------------------------------ #
     if ext is not None:
-        promoted = [
-            BartTensor(a)
-            if isinstance(a, torch.Tensor)
-            else _numpy_to_bart(a)
-            if _is_numpy(a)
-            else a
-            for a in inputs
-        ]
-        return _hot_path(ext, op_name, promoted, output_dims, **kwargs)
+        return _hot_path(ext, op_name, normalised, output_dims, **kwargs)
 
     # ------------------------------------------------------------------ #
-    # Path C: subprocess fallback (CFL temp files in /dev/shm)           #
+    # Path B: subprocess fallback (CFL temp files in /dev/shm)           #
     # ------------------------------------------------------------------ #
     from bartorch.pipe import run_subprocess  # lazy import
 
-    return run_subprocess(op_name, inputs, output_dims, **kwargs)
+    return run_subprocess(op_name, normalised, output_dims, **kwargs)
 
 
 # ---------------------------------------------------------------------------
@@ -125,10 +116,7 @@ def _is_numpy(a) -> bool:
         return False
 
 
-def _numpy_to_bart(a) -> BartTensor:
+def _numpy_to_tensor(a) -> torch.Tensor:
     import numpy as np
 
-    t = torch.from_numpy(np.asarray(a, dtype=np.complex64))
-    from bartorch.core.tensor import bart_from_tensor
-
-    return bart_from_tensor(t, copy=False)
+    return torch.from_numpy(np.asarray(a, dtype=np.complex64))

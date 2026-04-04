@@ -4,17 +4,32 @@ Toolbox (BART).
 
 Architecture
 ------------
-* **Hot path** (pure bartorch): when all inputs are ``BartTensor`` objects,
-  operations execute entirely inside a single C call with zero copies.
-  BART's in-memory CFL registry (``register_mem_cfl_non_managed``) maps
-  tensor ``data_ptr()`` buffers directly to BART's named-array namespace.
-  ``bart_command()`` then runs the requested tool in-process.
+All public bartorch functions accept and return plain ``torch.Tensor`` objects
+(``dtype=torch.complex64``).  There is no user-visible ``BartTensor`` subclass.
 
-* **Fallback path** (mixed Python): plain ``torch.Tensor``, NumPy arrays, or
-  other Python objects trigger an automatic copy into a managed ``BartTensor``
-  (or a FIFO-based subprocess call for tools not yet exposed in the C++ layer).
+* **Hot path** (C++ extension available): registers each tensor's
+  ``data_ptr()`` directly in BART's in-memory CFL registry via
+  ``register_mem_cfl_non_managed()``.  Axis reversal (C-order ↔ Fortran-order)
+  is handled transparently at the C++ boundary — zero copies.
+  ``bart_command()`` runs the requested tool in-process.
 
-See ``agents.md`` for the full design and roadmap.
+* **Fallback path** (no C++ extension): writes CFL file pairs to
+  ``/dev/shm`` (Linux RAM-backed tmpfs) and invokes BART as a subprocess.
+  CFL headers carry reversed dims; raw C-order bytes are written to the
+  ``.cfl`` file — no data movement.
+
+Axis convention
+---------------
+bartorch uses **C-order** (last index varies fastest), matching NumPy and
+PyTorch conventions::
+
+    bartorch shape: (coils, phase2, phase1, read)   ← C-order
+    BART internal:  (read,  phase1, phase2, coils)  ← Fortran-order
+
+The C++ bridge reverses the dimension array at the boundary; the underlying
+bytes are identical in both conventions.
+
+See ``agents.md`` for the full design and implementation roadmap.
 """
 
 from importlib.metadata import PackageNotFoundError, version

@@ -8,8 +8,9 @@ from __future__ import annotations
 
 from typing import Literal
 
+import torch
+
 from bartorch.core.graph import dispatch
-from bartorch.core.tensor import BartTensor
 
 __all__ = ["phantom"]
 
@@ -22,7 +23,7 @@ def phantom(
     ptype: Literal["shepp", "geo", "circ", "ring", "star", "bart"] = "shepp",
     ncoils: int = 1,
     device: str = "cpu",
-) -> BartTensor:
+) -> torch.Tensor:
     """Generate a numerical MRI phantom using BART's ``simu/phantom`` module.
 
     Parameters
@@ -52,8 +53,9 @@ def phantom(
 
     Returns
     -------
-    BartTensor
-        Complex64 Fortran-order tensor of shape ``(dims[0], dims[1][, dims[2]], ncoils)``.
+    torch.Tensor
+        Complex64 tensor.  For 2-D single-coil: shape ``(1, ny, nx)``
+        (C-order, coils first).
 
     Examples
     --------
@@ -62,13 +64,13 @@ def phantom(
     >>> import bartorch.ops as ops
     >>> ph = ops.phantom([256, 256])
     >>> ph.shape
-    torch.Size([256, 256, 1])
+    torch.Size([1, 256, 256])
 
     8-coil 256×256 k-space:
 
     >>> kspace = ops.phantom([256, 256], kspace=True, ncoils=8)
     >>> kspace.shape
-    torch.Size([256, 256, 1, 8])
+    torch.Size([8, 1, 256, 256])
     """
     return dispatch(
         "phantom",

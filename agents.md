@@ -94,7 +94,7 @@ bartpy/                           ← repository root
 │   │   ├── phantom.py            ← phantom()
 │   │   ├── pics.py               ← ecalib(), caldir(), pics()  [full API]
 │   │   ├── italgos.py            ← conjgrad(), ist(), fista(), irgnm(), chambolle_pock()
-│   │   └── _generated.py         ← generated at build time (gitignored)
+│   │   └── _generated.py         ← generated from BART source (committed)
 │   │
 │   ├── utils/
 │   │   ├── __init__.py           ← exports: readcfl, writecfl, axes_to_flags

@@ -29,8 +29,9 @@ to a built-in minimal list and generates generic stubs.
 
 Generated file
 --------------
-``bartorch/tools/_generated.py`` is **gitignored** and should be regenerated
-whenever the BART submodule is updated.
+``bartorch/tools/_generated.py`` is **committed to the repository** and tracks
+the pinned BART submodule commit.  Re-run this script whenever the BART
+submodule is updated to keep the generated wrappers in sync.
 """
 
 from __future__ import annotations
@@ -157,12 +158,22 @@ def _parse_tool_source(tool_name: str, src_path: Path) -> dict:
     code = _strip_c_comments(content)
 
     def _clean_c_str(s: str) -> str:
-        """Clean a C string literal for use in a Python docstring."""
-        # Interpret common C escape sequences, then escape remaining backslashes
-        s = s.replace("\\n", " ").replace("\\t", " ")
-        # Escape remaining backslashes so they don't create invalid Python escapes
-        s = s.replace("\\", "\\\\")
-        return s.strip()
+        """Clean a C string literal for use in a Python docstring.
+
+        Processes escape sequences in a single pass to avoid double-escaping:
+        - ``\\n``, ``\\r``, ``\\t``, ``\\f``, ``\\v`` → space
+        - ``\\\\`` (C escaped backslash) → ``\\\\`` (escaped for Python docstring)
+        - Any other ``\\X`` → ``\\\\X`` (escape the backslash for docstring safety)
+        """
+        def _replace(m: re.Match) -> str:
+            c = m.group(1)
+            if c in "nrtfv":
+                return " "
+            if c == "\\":
+                return "\\\\"
+            return "\\\\" + c
+
+        return re.sub(r"\\(.)", _replace, s).strip()
 
     # 1. Description (help_str)
     m = re.search(
@@ -184,9 +195,9 @@ def _parse_tool_source(tool_name: str, src_path: Path) -> dict:
             args_m.group(1),
         ):
             kind, argname = m.group(1), m.group(2)
-            if kind in _TENSOR_ARG_TYPES:
-                if kind != "OUTFILE":          # ARG_OUTFILE is the output, not an input
-                    tensor_inputs.append((argname,))
+            if kind in _TENSOR_ARG_TYPES and kind != "OUTFILE":
+                # ARG_OUTFILE drives output allocation; it is not a Python input arg
+                tensor_inputs.append((argname,))
             elif kind in _VALUE_ARG_TYPE_MAP:
                 py_type = _VALUE_ARG_TYPE_MAP[kind]
                 value_args.append((py_type, _to_py_ident(argname), argname))
@@ -206,12 +217,15 @@ def _parse_tool_source(tool_name: str, src_path: Path) -> dict:
         seen_keys.add(key)
         opts.append((py_type, key, raw_key, argname, _clean_c_str(descr)))
 
+    # Helper: a regex fragment that matches a quoted C string allowing \" inside
+    _CSTR = r'"((?:[^"\\]|\\.)*)"'
+
     if opts_m:
         block = opts_m.group(1)
 
         # OPT_SET / OPT_CLEAR  (char, ptr, descr)
         for m in re.finditer(
-            r"OPT_(?:SET|CLEAR)\s*\(\s*'([^']+)'\s*,[^,]+,\s*\"([^\"]+)\"",
+            r"OPT_(?:SET|CLEAR)\s*\(\s*'([^']+)'\s*,[^,]+,\s*" + _CSTR,
             block,
         ):
             _add_opt("bool", m.group(1), "", m.group(2))
@@ -222,14 +236,15 @@ def _parse_tool_source(tool_name: str, src_path: Path) -> dict:
             r"INT|UINT|LONG|ULONG|ULLONG|PINT|FLOAT|DOUBLE|"
             r"STRING|INFILE|OUTFILE|INOUTFILE|"
             r"VEC2|VEC3|VECN|FLVEC2|FLVEC3|FLVEC4|FLVECN"
-            r")\s*\(\s*'([^']+)'\s*,[^,]+,\s*\"([^\"]+)\"\s*,\s*\"([^\"]+)\"",
+            r")\s*\(\s*'([^']+)'\s*,[^,]+,\s*" + _CSTR + r"\s*,\s*" + _CSTR,
             block,
         ):
             _add_opt(m.group(1), m.group(2), m.group(3), m.group(4))
 
         # OPTL_SET / OPTL_CLEAR  (char_or_0, long_name, ptr, descr)
         for m in re.finditer(
-            r"OPTL_(?:SET|CLEAR)\s*\(\s*(?:'([^']+)'|0)\s*,\s*\"([^\"]+)\"\s*,[^,]+,\s*\"([^\"]+)\"",
+            r"OPTL_(?:SET|CLEAR)\s*\(\s*(?:'([^']+)'|0)\s*,\s*"
+            + _CSTR + r"\s*,[^,]+,\s*" + _CSTR,
             block,
         ):
             char = m.group(1) or ""
@@ -243,7 +258,8 @@ def _parse_tool_source(tool_name: str, src_path: Path) -> dict:
             r"INT|UINT|LONG|ULONG|ULLONG|PINT|FLOAT|DOUBLE|"
             r"STRING|INFILE|OUTFILE|INOUTFILE|"
             r"VEC2|VEC3|VECN|FLVEC2|FLVEC3|FLVEC4|FLVECN"
-            r")\s*\(\s*(?:'([^']+)'|0)\s*,\s*\"([^\"]+)\"\s*,[^,]+,\s*\"([^\"]+)\"\s*,\s*\"([^\"]+)\"",
+            r")\s*\(\s*(?:'([^']+)'|0)\s*,\s*"
+            + _CSTR + r"\s*,[^,]+,\s*" + _CSTR + r"\s*,\s*" + _CSTR,
             block,
         ):
             char = m.group(2) or ""
@@ -330,9 +346,8 @@ def _generate_func(info: dict) -> str:
     # ---- docstring ----
     doc_lines: list[str] = ['    """']
     if help_str:
-        # Wrap long descriptions at 76 chars
-        wrapped = textwrap.fill(help_str.rstrip(".") + ".", width=76,
-                                subsequent_indent="    ")
+        # Wrap long descriptions at 76 chars; preserve original punctuation
+        wrapped = textwrap.fill(help_str, width=76, subsequent_indent="    ")
         doc_lines.append("    " + wrapped.lstrip())
     else:
         doc_lines.append(f"    Wraps BART's ``{name}`` command.")
@@ -359,12 +374,11 @@ def _generate_func(info: dict) -> str:
         type_hint = _opt_type_hint(py_type)
         default = _opt_default(py_type)
         flag_str = f"-{orig_key}" if len(orig_key) == 1 else f"--{orig_key}"
-        descr_clean = descr.strip().rstrip(".")
         if argname:
             flag_str += f" {argname}"
         doc_lines.append(f"    {py_key} : {type_hint}")
         wrapped_descr = textwrap.fill(
-            f"        BART flag ``{flag_str}``: {descr_clean}. "
+            f"        BART flag ``{flag_str}``: {descr.strip()} "
             f"Default ``{default}``.",
             width=79, subsequent_indent="        ",
         )

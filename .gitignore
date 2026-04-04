@@ -21,9 +21,6 @@ CMakeFiles/
 cmake_install.cmake
 Makefile
 
-# Bartorch generated tools
-bartorch/tools/_generated.py
-
 # Docs build
 docs/_build/
 docs/_templates/

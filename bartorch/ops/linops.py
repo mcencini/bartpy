@@ -43,18 +43,6 @@ __all__ = [
 class BartLinop:
     """Opaque wrapper around a BART ``linop_s`` pointer.
 
-    Attributes
-    ----------
-    _ptr : int or None
-        Raw C pointer address (Python ``int``) once the C++ extension is
-        loaded; ``None`` at stub stage.
-    src_dims : list[int] or None
-        Shape of the operator's domain (source / input space).
-    dst_dims : list[int] or None
-        Shape of the operator's codomain (destination / output space).
-
-    Notes
-    -----
     ``BartLinop`` instances should be created only through the factory
     functions in this module (:func:`identity`, :func:`diag`,
     :func:`fft_linop`, …).  Do not instantiate directly.

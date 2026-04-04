@@ -34,6 +34,8 @@ intersphinx_mapping = {
     "torch": ("https://pytorch.org/docs/stable", None),
 }
 
+nbsphinx_execute = "never"
+
 autodoc_typehints = "description"
 
 napoleon_google_docstring = True

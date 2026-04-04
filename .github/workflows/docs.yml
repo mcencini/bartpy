@@ -45,6 +45,9 @@ jobs:
           python-version: "3.11"
           cache: pip
 
+      - name: Install system dependencies
+        run: sudo apt-get install -y pandoc
+
       - name: Install docs dependencies
         run: |
           pip install scikit-build-core

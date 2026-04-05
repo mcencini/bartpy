@@ -11,7 +11,10 @@ env:
 
 jobs:
   # -------------------------------------------------------------------------
-  # Job 1: pure Python tests (fast, no C++ build, no BART submodule)
+  # Full test suite — builds the C++ extension (BART embedded) and runs all
+  # tests.  MKL (from mkl/mkl-include Python packages) provides BLAS and FFT.
+  # MKL is detected automatically from torch's install location — no system
+  # BLAS or FFTW3 packages required.
   # -------------------------------------------------------------------------
   tests:
     runs-on: ubuntu-latest
@@ -21,52 +24,29 @@ jobs:
 
     steps:
       - uses: actions/checkout@v4
+        with:
+          submodules: recursive
 
       - uses: actions/setup-python@v5
         with:
           python-version: ${{ matrix.python-version }}
           cache: pip
 
-      - name: Install dependencies
-        run: pip install numpy torch pytest scikit-build-core
-
-      - name: Install package (skip C++ extension)
-        run: BARTORCH_SKIP_EXT=1 pip install -e . --no-build-isolation
-
-      - name: Run tests
-        run: pytest tests/ -v
-
-  # -------------------------------------------------------------------------
-  # Job 2: C++ extension build + smoke test
-  # Checks that the extension compiles and imports cleanly with BART embedded.
-  # Uses MKL (from mkl/mkl-include Python packages) for BLAS and FFT so that
-  # no system-level libfftw3-dev or libopenblas-dev is required.
-  # -------------------------------------------------------------------------
-  build-ext:
-    name: Build C++ extension (BART embedded)
-    runs-on: ubuntu-latest
-
-    steps:
-      - uses: actions/checkout@v4
-        with:
-          submodules: recursive
-
-      - uses: actions/setup-python@v5
-        with:
-          python-version: "3.11"
-          cache: pip
-
       - name: Install system dependencies
         run: sudo apt-get install -y cmake
 
-      - name: Install Python build dependencies (MKL provides BLAS + FFTW3)
+      - name: Install Python build dependencies
+        # Using --no-build-isolation means pip will NOT auto-install
+        # [build-system].requires, so we install them explicitly here.
+        # mkl + mkl-include are declared in pyproject.toml [build-system].requires;
+        # torch CPU wheel from the WHL index does not bundle MKL.
         run: |
           pip install scikit-build-core pybind11 numpy pytest
           pip install torch --index-url https://download.pytorch.org/whl/cpu
-          pip install mkl mkl-include intel-openmp
+          pip install mkl mkl-include
 
       - name: Build and install bartorch (compiles C++ extension with BART)
         run: pip install -e . --no-build-isolation
 
-      - name: Smoke test — run extension tests
-        run: pytest tests/test_ext.py -v
+      - name: Run full test suite
+        run: pytest tests/ -v

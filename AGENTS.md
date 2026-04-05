@@ -417,6 +417,73 @@ CMAKE_ARGS="-DUSE_CUDA=ON" pip install -e .
   rolloff weight tests (numerical adjointness tests gated on Phase-1 `run()`)
 - [x] AGENTS.md §6 and §8 updated
 
+### Phase 0.6 — Torch prior (plug-and-play) via `--wrap nlop_tf_create` ✅
+
+Hijacks BART's TensorFlow-prior interface (`-R TF:{path}:lambda` in
+`grecon/optreg.c`) using the same `--wrap` linker trick as FINUFFT.  No BART
+source modifications required.
+
+**Call flow:**
+
+1. Python: `bt.pics(kspace, sens, torch_prior=denoiser, torch_prior_lambda=1.0)`
+2. `pics()` in `_commands.py` computes BART Fortran-order `img_dims` from
+   the kspace shape, calls `_ext.register_torch_prior(name, fn, img_dims)`, and
+   appends `R='TF:{bartorch://<name>}:<lambda>'` to the BART flags.
+3. `dispatch("pics", …)` → `bart_command("pics … -R TF:{bartorch://name}:lam")`
+4. BART's `optreg.c` TENFL case calls `nlop_tf_create("bartorch://name")`.
+5. `__wrap_nlop_tf_create` (in `torch_prior_nlop.c`) intercepts, looks up the
+   entry in the C registry, creates `nlop_torch_prior_create(apply, cleanup, ctx, …)`.
+6. BART wraps the nlop in `prox_nlgrad_create(nlop, 1, 1.0, lambda, false)`.
+7. Every ADMM/IST iteration calls the proximal operator:
+   - `nlop_apply` → GIL → `fn(x)` → `residual = x − D(x)` (cached)
+   - `nlop_adjoint` → returns `scale × residual`
+   - Update: `z ← z − mu·lambda · (z − D(z))`
+   With `mu = 1`, `lambda = 1`: `z ← D(z)` (standard PnP-RED proximal step).
+8. Python `finally` block calls `_ext.unregister_torch_prior(name)`.
+
+**nlop semantics (`grad_nlop=false` path):**
+
+| Step | Operation |
+|---|---|
+| `forward(x) → scalar` | Calls `D(x)`, caches `residual = x − D(x)`, returns `‖residual‖²/2` |
+| `adjoint(x, grad=1) → image` | Returns cached `residual = x − D(x)` |
+| `deriv(x) → scalar` | Identity approximation (returns 0; not used by `prox_nlgrad`) |
+
+**Denoiser convention:**
+
+```python
+fn(x: torch.Tensor) -> torch.Tensor
+# x: flat complex64 tensor, length = prod(spatial_dims)
+# returns: same shape and dtype
+```
+
+No `sigma` argument — the denoiser is called without noise-level information.
+Compatible with `torch.nn.Module`, deepinverse `Denoiser`, and plain functions.
+
+**BART img_dims convention:**
+
+bartorch kspace C-order: `(nc, [nz,] ny, nx)` with a singleton z-dim for 2-D.
+Fortran dims (reversed): `[nx, ny, nz, nc, 1, …]` — coil at Fortran dim 3.
+`img_dims` = Fortran ksp_dims with `dims[3] = 1` (coil zeroed).
+
+- [x] `src/bartorch/csrc/torch_prior_nlop.h`: shared C/C++ interface (no `complex float`,
+  fully portable); `tp_apply_t` / `tp_cleanup_t` callback types; registry and factory decls
+- [x] `src/bartorch/csrc/torch_prior_nlop.c` (pure C99): `struct torch_prior_nlop_s`,
+  BART nlop callbacks (`torch_prior_fwd/der/adj/del`), `nlop_torch_prior_create`,
+  `tp_registry_insert/remove`, `__wrap_nlop_tf_create` — all `complex float` confined here
+- [x] `src/bartorch/csrc/torch_prior.cpp` (pure C++): `TorchPriorEntry` registry,
+  `cpp_prior_apply` / `cpp_prior_cleanup` (C-linkage callbacks into PyTorch/GIL),
+  `bartorch_register_torch_prior` / `bartorch_unregister_torch_prior` pybind11 bindings
+- [x] `src/bartorch/csrc/bartorch_ext.cpp`: `register_torch_prior` /
+  `unregister_torch_prior` pybind11 bindings
+- [x] `src/bartorch/csrc/CMakeLists.txt`: `torch_prior.cpp` + `torch_prior_nlop.c` added;
+  unconditional `--wrap nlop_tf_create` linker flag (Linux + macOS)
+- [x] `src/bartorch/tools/_commands.py`: `pics()` extended with `torch_prior` +
+  `torch_prior_lambda`; `_bart_img_dims_from_kspace` helper
+- [x] `tests/test_tools_pics.py`: Python-side tests for `_bart_img_dims_from_kspace`
+  and `pics()` arg merging/validation (no ext required)
+- [x] `AGENTS.md` §8 updated
+
 ### Phase 1 — C++ Extension Core
 - [ ] `tensor_bridge.hpp`: zero-copy `torch.Tensor` ↔ CFL with axis reversal
 - [ ] `_bartorch_ext.run()`: build argv, call `bart_command()`, return tensor

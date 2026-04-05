@@ -54,11 +54,15 @@ jobs:
       - name: Install system dependencies
         run: sudo apt-get install -y cmake pandoc
 
-      - name: Install Python build dependencies (MKL provides BLAS + FFTW3)
+      - name: Install Python build dependencies
+        # Using --no-build-isolation means pip will NOT auto-install
+        # [build-system].requires, so we install them explicitly here.
+        # mkl + mkl-include are declared in pyproject.toml [build-system].requires;
+        # torch CPU wheel from the WHL index does not bundle MKL.
         run: |
           pip install scikit-build-core pybind11
           pip install torch --index-url https://download.pytorch.org/whl/cpu
-          pip install mkl mkl-include intel-openmp
+          pip install mkl mkl-include
 
       - name: Build and install bartorch (compiles C++ extension with BART)
         run: pip install -e ".[docs]" --no-build-isolation

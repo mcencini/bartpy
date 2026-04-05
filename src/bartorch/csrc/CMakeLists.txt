@@ -5,18 +5,7 @@ project(bartorch_ext LANGUAGES C CXX)
 # Options
 # ---------------------------------------------------------------------------
 option(USE_CUDA "Build with CUDA support" OFF)
-option(BARTORCH_SKIP_EXT "Skip building the C++ extension (pure-Python fallback)" OFF)
 option(BARTORCH_USE_FINUFFT "Replace BART's Kaiser-Bessel gridder with FINUFFT's optimised ES-kernel spreader" ON)
-
-if(DEFINED ENV{BARTORCH_SKIP_EXT} AND "$ENV{BARTORCH_SKIP_EXT}" STREQUAL "1")
-    set(BARTORCH_SKIP_EXT ON)
-endif()
-
-if(BARTORCH_SKIP_EXT)
-    message(STATUS "BARTORCH_SKIP_EXT=1 — skipping C++ extension build")
-    return()
-endif()
-
 # ---------------------------------------------------------------------------
 # Find PyTorch (libtorch)
 # ---------------------------------------------------------------------------
@@ -83,87 +72,182 @@ set(BART_DEFS
 if(USE_CUDA)
     list(APPEND BART_DEFS USE_CUDA)
     enable_language(CUDA)
+
+    # ---------------------------------------------------------------------------
+    # CUDA toolkit search — works with system CUDA, CUDA-enabled torch wheels,
+    # and pip nvidia-* packages (nvidia-cuda-runtime-cu12, etc.).
+    #
+    # Strategy: derive candidate CUDA library roots from the location of torch,
+    # exactly as we do for MKL (see below).  pip CUDA wheels install their .so
+    # files under  site-packages/nvidia/<pkg>/lib/ ; we add those dirs to
+    # CMAKE_LIBRARY_PATH so find_package(CUDAToolkit) picks them up without
+    # needing a system-level CUDA installation.
+    # ---------------------------------------------------------------------------
+    execute_process(
+        COMMAND "${Python3_EXECUTABLE}" -c
+        "
+import os, site, sys
+dirs = []
+try:
+    import torch
+    sp = os.path.dirname(os.path.dirname(os.path.abspath(torch.__file__)))
+    nvidia = os.path.join(sp, 'nvidia')
+    if os.path.isdir(nvidia):
+        for pkg in sorted(os.listdir(nvidia)):
+            for sub in ('lib', 'bin', 'include'):
+                d = os.path.join(nvidia, pkg, sub)
+                if os.path.isdir(d):
+                    dirs.append(d)
+except ImportError:
+    pass
+print(';'.join(dirs))
+        "
+        OUTPUT_VARIABLE _nvidia_pkg_dirs
+        OUTPUT_STRIP_TRAILING_WHITESPACE
+    )
+    if(_nvidia_pkg_dirs)
+        # Make find_package(CUDAToolkit) find libs from pip nvidia-* packages.
+        list(PREPEND CMAKE_LIBRARY_PATH ${_nvidia_pkg_dirs})
+        list(PREPEND CMAKE_INCLUDE_PATH ${_nvidia_pkg_dirs})
+        message(STATUS "CUDA: added pip nvidia-* dirs to library search path")
+    endif()
+
     find_package(CUDAToolkit REQUIRED)
 endif()
 
 # ---------------------------------------------------------------------------
-# BLAS + FFT via MKL — required, no system-library fallback.
+# BLAS + FFT via MKL — required, no fallback.
 #
-# MKL is always available when torch is installed via PyPI:
-#   - `pip install torch` (CPU wheel) pulls in `mkl` (libmkl_rt.so) and
-#     `intel-openmp` as runtime dependencies.
-#   - `pip install mkl-include` provides the compile-time headers
-#     (mkl_cblas.h, fftw/fftw3.h, …); add this to your build environment.
+# MKL is a declared bartorch dependency (pyproject.toml) and provides both
+# CBLAS and an FFTW3 compatibility layer (libmkl_rt) used by BART and FINUFFT.
 #
-# All three packages install into the active Python environment's prefix so
-# we locate them by inspecting sys.prefix — no pip metadata required.
+# Detection strategy (environment-agnostic):
 #
-# libmkl_rt.so is a single shared library that implements:
-#   * CBLAS  (cblas_cgemm etc.)  via `USE_MKL` in BART's blas.c
-#   * FFTW3  (fftwf_execute etc.) via MKL's FFTW3 compatibility layer
-# Wheel size stays small: the .so lives in the user's Python environment
-# and is NOT bundled into the bartorch wheel.
+#  mkl and mkl-include install into the *Python prefix*, not inside
+#  site-packages itself.  The prefix varies across installers:
+#    pip --user  → ~/.local
+#    venv        → <venv root>
+#    conda       → $CONDA_PREFIX
+#    system      → /usr  or  /usr/local
+#  sys.prefix alone does not reliably find these; instead we derive candidate
+#  search roots from the location of torch (always co-installed with MKL):
+#
+#    torch.__file__  → .../site-packages/torch/__init__.py
+#                                         ↑ site-packages (sp)
+#                               3 levels up = Python prefix
+#                                             (e.g. ~/.local  /usr  $CONDA_PREFIX)
+#
+#  We also include sys.prefix and all site.getsitepackages() parents to cover
+#  every common environment type.
+#
+#  Header sub-dirs searched per root: include/  include/mkl/  Library/include/
+#  Library sub-dirs searched per root: lib/  lib64/  Library/lib/  Library/bin/
+#  Library file names: libmkl_rt.so.2  libmkl_rt.so  libmkl_rt.dylib
+#                      mkl_rt.2.dll  mkl_rt.dll  (Windows / conda)
 # ---------------------------------------------------------------------------
 
-# Locate the Python environment prefix.
+# ── Build candidate search roots via Python ──────────────────────────────────
 execute_process(
-    COMMAND "${Python3_EXECUTABLE}" -c "import sys; print(sys.prefix)"
-    OUTPUT_VARIABLE _py_prefix
+    COMMAND "${Python3_EXECUTABLE}" -c
+    "
+import os, site, sys
+roots = set()
+try:
+    import torch
+    sp = os.path.dirname(os.path.dirname(os.path.abspath(torch.__file__)))
+    roots.add(os.path.normpath(os.path.join(sp, '..', '..', '..')))
+except ImportError:
+    pass
+try:
+    for sp in site.getsitepackages():
+        roots.add(os.path.normpath(os.path.join(sp, '..', '..', '..')))
+except AttributeError:
+    pass
+try:
+    up = site.getusersitepackages()
+    roots.add(os.path.normpath(os.path.join(up, '..', '..', '..')))
+except AttributeError:
+    pass
+roots.add(sys.prefix)
+print(';'.join(r for r in sorted(roots) if r))
+    "
+    OUTPUT_VARIABLE _py_roots
     OUTPUT_STRIP_TRAILING_WHITESPACE
 )
 
-# Find MKL CBLAS headers (mkl_cblas.h) — from `pip install mkl-include`.
-# Both the standalone package and conda install them at <prefix>/include.
+# ── Search for MKL headers ───────────────────────────────────────────────────
 set(_mkl_include_dir "")
-foreach(_d "${_py_prefix}/include" "${_py_prefix}/include/mkl")
-    if(EXISTS "${_d}/mkl_cblas.h")
-        set(_mkl_include_dir "${_d}")
+foreach(_root ${_py_roots})
+    foreach(_rel "include" "include/mkl" "Library/include")
+        if(EXISTS "${_root}/${_rel}/mkl_cblas.h")
+            set(_mkl_include_dir "${_root}/${_rel}")
+            break()
+        endif()
+    endforeach()
+    if(_mkl_include_dir)
         break()
     endif()
 endforeach()
 
-# Find libmkl_rt — from `pip install mkl` (a torch dependency).
+# ── Search for MKL runtime library ──────────────────────────────────────────
 set(_mkl_rt_lib "")
-foreach(_lib "libmkl_rt.so.2" "libmkl_rt.so" "libmkl_rt.dylib")
-    if(EXISTS "${_py_prefix}/lib/${_lib}")
-        set(_mkl_rt_lib "${_py_prefix}/lib/${_lib}")
+foreach(_root ${_py_roots})
+    foreach(_rel "lib" "lib64" "Library/lib" "Library/bin")
+        foreach(_name
+            "libmkl_rt.so.2" "libmkl_rt.so" "libmkl_rt.dylib"
+            "mkl_rt.2.dll"   "mkl_rt.dll")
+            if(EXISTS "${_root}/${_rel}/${_name}")
+                set(_mkl_rt_lib "${_root}/${_rel}/${_name}")
+                break()
+            endif()
+        endforeach()
+        if(_mkl_rt_lib)
+            break()
+        endif()
+    endforeach()
+    if(_mkl_rt_lib)
         break()
     endif()
 endforeach()
 
-if(NOT _mkl_include_dir OR NOT _mkl_rt_lib)
+# ── MKL found — use it ───────────────────────────────────────────────────────
+if(_mkl_include_dir AND _mkl_rt_lib)
+    set(CBLAS_INCLUDE_DIR  "${_mkl_include_dir}")
+    set(CBLAS_LIBRARY      "${_mkl_rt_lib}")
+    # MKL ships a drop-in FFTW3 compatibility layer; headers live in fftw/
+    set(FFTW3F_INCLUDE_DIR "${_mkl_include_dir}/fftw")
+    set(FFTW3F_LIBRARY     "${_mkl_rt_lib}")
+    list(APPEND BART_DEFS USE_MKL)
+    message(STATUS "BLAS+FFT: MKL")
+    message(STATUS "  headers : ${_mkl_include_dir}")
+    message(STATUS "  runtime : ${_mkl_rt_lib}")
+else()
+    # MKL is required — it provides both CBLAS and the FFTW3 compatibility
+    # layer used by BART's FFT routines and FINUFFT.  There is no system
+    # BLAS or FFTW3 fallback: MKL is the only supported backend.
+    #
+    # MKL is co-installed with torch in any standard Python environment.
+    # If this error fires, ensure mkl-include is installed alongside torch:
+    #   pip install mkl mkl-include
     message(FATAL_ERROR
-        "MKL not found in Python environment '${_py_prefix}'.\n"
-        "Install the build dependencies:\n"
-        "  pip install mkl mkl-include intel-openmp\n"
-        "(These are installed automatically alongside `pip install torch` on "
-        "standard PyPI CPU wheels.)"
+        "MKL not found in any Python root (searched: ${_py_roots}).\n"
+        "MKL must be installed in the same Python environment as torch:\n"
+        "  pip install mkl mkl-include\n"
+        "(On a standard `pip install torch` CPU wheel these are pulled in "
+        "automatically as dependencies.)\n"
     )
 endif()
-
-set(CBLAS_INCLUDE_DIR  "${_mkl_include_dir}")
-set(CBLAS_LIBRARY      "${_mkl_rt_lib}")
-# MKL ships a drop-in FFTW3 compatibility layer; headers live in fftw/
-set(FFTW3F_INCLUDE_DIR "${_mkl_include_dir}/fftw")
-set(FFTW3F_LIBRARY     "${_mkl_rt_lib}")
-# Tell BART's blas.c to #include <mkl_cblas.h> instead of <cblas.h>
-list(APPEND BART_DEFS USE_MKL)
-message(STATUS "BLAS+FFT: MKL in Python environment '${_py_prefix}'")
-message(STATUS "  headers : ${_mkl_include_dir}")
-message(STATUS "  runtime : ${_mkl_rt_lib}")
 
 # ---------------------------------------------------------------------------
 # FINUFFT — optimised multithreaded ES-kernel spreader/interpolator
 #
 # When BARTORCH_USE_FINUFFT is ON (the default), FINUFFT is built as a static
 # library from the finufft/ submodule and the final _bartorch_ext.so is linked
-# with  -Wl,--wrap,grid2  -Wl,--wrap,grid2H .  The linker then redirects every
-# call to grid2()/grid2H() (including those buried in noncart/nufft.c) to the
-# __wrap_grid2/__wrap_grid2H implementations in finufft_grid.cpp.
+# with  -Wl,--wrap,grid2  -Wl,--wrap,grid2H .
 #
-# MKL's FFTW3 compatibility layer (libmkl_rt.so) is used so that FINUFFT does
-# not need to download or compile its own FFTW.  MKL's fftw3.h lives in the
-# fftw/ subdirectory of the MKL include path (already found above).
+# FINUFFT needs an FFTW3 backend.  We tell it to use whatever FFTW3 library
+# was found above (FFTW3F_LIBRARY) — either libmkl_rt.so (MKL path) or the
+# system libfftw3f (fallback path) — by setting FINUFFT_FFTW_LIBRARIES.
 # ---------------------------------------------------------------------------
 if(BARTORCH_USE_FINUFFT)
     set(_finufft_dir "${CMAKE_SOURCE_DIR}/../../finufft")
@@ -193,23 +277,22 @@ if(BARTORCH_USE_FINUFFT)
     set(FINUFFT_USE_DUCC0  OFF CACHE BOOL "" FORCE)   # use FFTW backend, not DUCC0
     set(FINUFFT_USE_OPENMP ON  CACHE BOOL "" FORCE)   # multi-threaded spreading
 
-    # Tell FINUFFT to use MKL's FFTW3 compatibility library instead of downloading
-    # or probing the system for FFTW.  setupFFTW.cmake skips CPM/find_package(FFTW)
-    # for any value of FINUFFT_FFTW_LIBRARIES other than "DEFAULT" or "DOWNLOAD".
-    set(FINUFFT_FFTW_LIBRARIES "${_mkl_rt_lib}" CACHE STRING
-        "FFTW library used by FINUFFT (MKL FFTW3 compatibility layer)" FORCE)
+    # Point FINUFFT at the FFTW3 library found above (MKL or system fftw3f).
+    # Any non-DEFAULT / non-DOWNLOAD value makes setupFFTW.cmake skip its own
+    # CPM/find_package search and use our library directly.
+    set(FINUFFT_FFTW_LIBRARIES "${FFTW3F_LIBRARY}" CACHE STRING
+        "FFTW library used by FINUFFT" FORCE)
     set(FINUFFT_FFTW_SUFFIX "" CACHE STRING "" FORCE)   # no _threads/_omp suffix
 
     # ── Build FINUFFT as a subproject ────────────────────────────────────────
     add_subdirectory("${_finufft_dir}" finufft_build EXCLUDE_FROM_ALL)
 
     # finufft_fftlibs is an INTERFACE library created by setupFFTW.cmake.
-    # Inject MKL's fftw/ include directory so that all FINUFFT compilation
-    # units that #include <fftw3.h> find MKL's compatibility header.
+    # Inject the FFTW3 include dir so all FINUFFT compilation units find fftw3.h.
     # This must come AFTER add_subdirectory so the target already exists.
     target_include_directories(finufft_fftlibs INTERFACE "${FFTW3F_INCLUDE_DIR}")
 
-    message(STATUS "FINUFFT: enabled — MKL FFTW backend: ${_mkl_rt_lib}")
+    message(STATUS "FINUFFT: enabled — FFTW backend: ${FFTW3F_LIBRARY}")
 endif()
 
 # ---------------------------------------------------------------------------
@@ -400,6 +483,8 @@ endif()
 pybind11_add_module(_bartorch_ext
     bartorch_ext.cpp
     bart_ops.cpp
+    torch_prior.cpp
+    torch_prior_nlop.c
 )
 target_include_directories(_bartorch_ext PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}
@@ -417,10 +502,7 @@ if(BARTORCH_USE_FINUFFT)
     target_link_libraries(_bartorch_ext PRIVATE finufft)
     target_compile_definitions(_bartorch_ext PRIVATE BARTORCH_USE_FINUFFT)
 
-    # Redirect all calls to grid2/grid2H and rolloff_correction/apply_rolloff_correction*
-    # (from BART's noncart/grid.c and noncart/nufft.c) to the __wrap_* implementations
-    # in finufft_grid.cpp at link time.
-    # Linux (GNU ld): --wrap; macOS (Apple ld): -wrap,_symbol.
+    # Redirect grid2/grid2H and rolloff_correction* to finufft_grid.cpp implementations.
     if(APPLE)
         target_link_options(_bartorch_ext PRIVATE
             -Wl,-wrap,_grid2
@@ -440,6 +522,33 @@ if(BARTORCH_USE_FINUFFT)
     endif()
     message(STATUS "FINUFFT grid replacement: --wrap,grid2 --wrap,grid2H --wrap,rolloff_correction --wrap,apply_rolloff_correction --wrap,apply_rolloff_correction2 active")
 endif()
+
+# ---------------------------------------------------------------------------
+# torch_prior.cpp + torch_prior_nlop.c — --wrap nlop_tf_create
+#
+# torch_prior_nlop.c (pure C99) contains all BART nlop types and `complex float`
+# callbacks.  torch_prior.cpp (C++) contains the registry, pybind11 bindings,
+# and PyTorch tensor calls.  The split ensures no C99-only types (`complex float`,
+# `_Complex`) appear in C++ translation units, making the code portable to
+# GCC, Clang, and MSVC.
+#
+# Both files are already listed in pybind11_add_module above.
+# We always add --wrap nlop_tf_create so __wrap_nlop_tf_create (in
+# torch_prior_nlop.c) intercepts every call to nlop_tf_create() inside the
+# binary.  Paths that do NOT start with "bartorch://" fall through to
+# __real_nlop_tf_create (the original BART TF implementation), which will
+# error gracefully if TF support is absent.
+# ---------------------------------------------------------------------------
+if(APPLE)
+    target_link_options(_bartorch_ext PRIVATE
+        -Wl,-wrap,_nlop_tf_create
+    )
+else()
+    target_link_options(_bartorch_ext PRIVATE
+        -Wl,--wrap,nlop_tf_create
+    )
+endif()
+message(STATUS "Torch prior: --wrap,nlop_tf_create active")
 
 if(USE_CUDA)
     target_sources(_bartorch_ext PRIVATE cuda/cuda_bridge.hpp)

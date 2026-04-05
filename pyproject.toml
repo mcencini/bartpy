@@ -2,6 +2,8 @@
 requires = [
     "scikit-build-core>=0.9",
     "torch",        # provides libtorch + cmake config at build time
+    "mkl",          # MKL runtime (libmkl_rt) — needed at cmake configure time
+    "mkl-include",  # MKL compile-time headers (mkl_cblas.h, fftw/fftw3.h)
 ]
 build-backend = "scikit_build_core.build"
 
@@ -15,6 +17,7 @@ requires-python = ">=3.9"
 dependencies = [
     "torch>=2.0",
     "numpy>=1.21",
+    "mkl",          # MKL runtime (libmkl_rt) — BLAS + FFTW3 backend for BART
 ]
 classifiers = [
     "Development Status :: 2 - Pre-Alpha",
@@ -55,7 +58,6 @@ docs = [
 # Build variants:
 #   pip install -e .                          # CPU (default)
 #   CMAKE_ARGS="-DUSE_CUDA=ON" pip install .  # CUDA
-#   BARTORCH_SKIP_EXT=1 pip install .         # pure-Python / subprocess only
 [tool.scikit-build]
 cmake.source-dir = "src/bartorch/csrc"
 cmake.build-type = "Release"
@@ -66,9 +68,6 @@ wheel.packages = ["src/bartorch"]
 wheel.install-dir = "bartorch"
 
 [tool.scikit-build.cmake.define]
-# Forward BARTORCH_SKIP_EXT env var to CMake so CMakeLists.txt can skip the
-# extension build when only the pure-Python fallback is needed.
-BARTORCH_SKIP_EXT = {env = "BARTORCH_SKIP_EXT", default = "OFF"}
 # Forward USE_CUDA so `CMAKE_ARGS="-DUSE_CUDA=ON"` still works, but the
 # cmake.define table also accepts the env var directly.
 USE_CUDA = {env = "BARTORCH_USE_CUDA", default = "OFF"}

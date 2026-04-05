@@ -24,6 +24,7 @@ part of the public API.
 from __future__ import annotations
 
 import functools
+import itertools
 
 import torch
 
@@ -147,7 +148,7 @@ def bart_op(func=None, *, real_output: bool = False, cpu_only: bool = True):
             # Detect CUDA inputs and move to CPU if needed
             cuda_device = None
             if cpu_only:
-                for a in list(new_args) + list(new_kwargs.values()):
+                for a in itertools.chain(new_args, new_kwargs.values()):
                     if isinstance(a, torch.Tensor) and a.device.type == "cuda":
                         cuda_device = a.device
                         break
@@ -167,11 +168,16 @@ def bart_op(func=None, *, real_output: bool = False, cpu_only: bool = True):
             if cpu_only and cuda_device is not None:
                 if isinstance(result, torch.Tensor):
                     result = result.to(cuda_device)
-                elif isinstance(result, (list, tuple)):
-                    result = type(result)(
+                elif isinstance(result, tuple):
+                    result = tuple(
                         r.to(cuda_device) if isinstance(r, torch.Tensor) else r
                         for r in result
                     )
+                elif isinstance(result, list):
+                    result = [
+                        r.to(cuda_device) if isinstance(r, torch.Tensor) else r
+                        for r in result
+                    ]
 
             if real_output and isinstance(result, torch.Tensor):
                 return result.real

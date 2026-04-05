@@ -312,20 +312,12 @@ def pics(
 
     >>> reco = bt.pics(kspace, sens, R="T:7:0:0.01", admm=True)
     """
-    # Normalise R: a single string or None stays as-is; a list produces
-    # multiple -R entries via the dispatch layer's list-flag expansion.
-    R_val: list[str] | str | None
-    if isinstance(R, list) and len(R) == 1:
-        R_val = R[0]
-    else:
-        R_val = R
-
     return dispatch(
         "pics",
         [kspace, sens],
         None,
         r=lambda_,
-        R=R_val,
+        R=R,
         l1=l1 or None,
         l2=l2 or None,
         i=iter_,

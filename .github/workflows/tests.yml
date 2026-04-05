@@ -12,9 +12,9 @@ env:
 jobs:
   # -------------------------------------------------------------------------
   # Full test suite — builds the C++ extension (BART embedded) and runs all
-  # tests.  The extension is required.
-  # Uses MKL (from mkl/mkl-include Python packages) for BLAS and FFT so that
-  # no system-level libfftw3-dev or libopenblas-dev is required.
+  # tests.  MKL (from mkl/mkl-include Python packages) provides BLAS and FFT.
+  # MKL is detected automatically from torch's install location — no system
+  # BLAS or FFTW3 packages required.
   # -------------------------------------------------------------------------
   tests:
     runs-on: ubuntu-latest
@@ -35,11 +35,12 @@ jobs:
       - name: Install system dependencies
         run: sudo apt-get install -y cmake
 
-      - name: Install Python build dependencies (MKL provides BLAS + FFTW3)
+      - name: Install Python build dependencies
+        # mkl + mkl-include are bartorch dependencies (pyproject.toml) and are
+        # also pulled in transitively by torch on standard PyPI CPU wheels.
         run: |
           pip install scikit-build-core pybind11 numpy pytest
           pip install torch --index-url https://download.pytorch.org/whl/cpu
-          pip install mkl mkl-include intel-openmp
 
       - name: Build and install bartorch (compiles C++ extension with BART)
         run: pip install -e . --no-build-isolation

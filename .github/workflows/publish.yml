@@ -49,7 +49,6 @@ jobs:
           sudo apt-get install -y cmake
           pip install build scikit-build-core pybind11
           pip install torch --index-url https://download.pytorch.org/whl/cpu
-          pip install mkl mkl-include intel-openmp
 
       - name: Build sdist and wheel (C++ extension compiled with BART)
         # scikit-build-core is the build backend declared in pyproject.toml.

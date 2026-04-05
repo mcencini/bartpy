@@ -18,14 +18,14 @@ on:
     branches: [main]
     paths:
       - "docs/**"
-      - "bartorch/**"
+      - "src/**"
       - "*.md"
       - "*.rst"
   pull_request:
     branches: [main, develop]
     paths:
       - "docs/**"
-      - "bartorch/**"
+      - "src/**"
 
 env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
@@ -33,6 +33,8 @@ env:
 jobs:
   # -------------------------------------------------------------------------
   # Job 1: validate docs build locally (runs on every PR and push)
+  # Notebooks are NOT executed (nbsphinx_execute='never') so the pure-Python
+  # package is sufficient — no C++ extension or system libs required.
   # -------------------------------------------------------------------------
   build-docs:
     name: Build Sphinx docs
@@ -40,8 +42,6 @@ jobs:
 
     steps:
       - uses: actions/checkout@v4
-        with:
-          submodules: recursive
 
       - uses: actions/setup-python@v5
         with:
@@ -49,16 +49,20 @@ jobs:
           cache: pip
 
       - name: Install system dependencies
-        run: |
-          sudo apt-get install -y pandoc cmake libfftw3-dev libopenblas-dev
+        run: sudo apt-get install -y pandoc
 
       - name: Install Python build dependencies
-        run: |
-          pip install scikit-build-core pybind11
-          pip install torch --index-url https://download.pytorch.org/whl/cpu
+        run: pip install torch --index-url https://download.pytorch.org/whl/cpu
 
-      - name: Build and install bartorch with docs extras (compiles C++ extension)
-        run: pip install -e ".[docs]" --no-build-isolation
+      - name: Build and install bartorch (pure-Python, no C++ extension)
+        run: BARTORCH_SKIP_EXT=1 pip install -e ".[docs]" --no-build-isolation
+
+      - name: Strip pre-committed notebook outputs
+        # Clears any stale cell outputs committed to the repo so that
+        # nbsphinx_execute=always starts from a clean slate and never
+        # generates "image file not readable" warnings from outputs that
+        # belong to a previous run.
+        run: nbstripout examples/*.ipynb
 
       - name: Build Sphinx HTML
         run: sphinx-build -W --keep-going -b html docs docs/_build/html

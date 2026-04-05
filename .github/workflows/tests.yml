@@ -39,6 +39,8 @@ jobs:
   # -------------------------------------------------------------------------
   # Job 2: C++ extension build + smoke test
   # Checks that the extension compiles and imports cleanly with BART embedded.
+  # Uses MKL (from mkl/mkl-include Python packages) for BLAS and FFT so that
+  # no system-level libfftw3-dev or libopenblas-dev is required.
   # -------------------------------------------------------------------------
   build-ext:
     name: Build C++ extension (BART embedded)
@@ -55,12 +57,13 @@ jobs:
           cache: pip
 
       - name: Install system dependencies
-        run: sudo apt-get install -y cmake libfftw3-dev libopenblas-dev
+        run: sudo apt-get install -y cmake
 
-      - name: Install Python build dependencies
+      - name: Install Python build dependencies (MKL provides BLAS + FFTW3)
         run: |
           pip install scikit-build-core pybind11 numpy pytest
           pip install torch --index-url https://download.pytorch.org/whl/cpu
+          pip install mkl mkl-include intel-openmp
 
       - name: Build and install bartorch (compiles C++ extension with BART)
         run: pip install -e . --no-build-isolation

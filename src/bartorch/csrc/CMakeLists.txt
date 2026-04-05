@@ -59,35 +59,90 @@ endif()
 # ---------------------------------------------------------------------------
 # BART source tree (git submodule at <repo_root>/bart)
 # ---------------------------------------------------------------------------
-# We build only the static libraries we need, not the bart binary.
-set(BART_SRC_DIR "${CMAKE_SOURCE_DIR}/../../bart/src")
+# Package layout:  src/bartorch/csrc/CMakeLists.txt
+# CMAKE_SOURCE_DIR = <repo>/src/bartorch/csrc
+# Three levels up reaches the repo root where bart/ lives.
+set(BART_SRC_DIR "${CMAKE_SOURCE_DIR}/../../../bart/src")
 
 # ---------------------------------------------------------------------------
-# FFTW3 (single-precision) — dynamic link to keep the wheel small.
-# BART's fft_plan.c uses fftwf_* (float-precision FFTW3).
-# The .so is NOT bundled into the wheel; it is a runtime dependency.
-# TODO (Phase 1): replace with MKL FFT plan when USE_MKL is wired up.
+# BLAS + FFT: prefer MKL from Python packages over system libraries.
+#
+# Detection order:
+#  1. MKL from `mkl` + `mkl-include` Python packages.
+#     - Standard `pip install torch` pulls in `mkl` as a dependency, so this
+#       path works for all users of the default PyPI torch wheel.
+#     - `mkl-include` provides both cblas headers (mkl.h / mkl_cblas.h) and
+#       a full FFTW3 compatibility layer (fftw/fftw3.h → libmkl_rt at runtime).
+#     - `libmkl_rt.so` exports cblas_cgemm, fftwf_execute, fftwf_plan_*, …
+#     - Wheel size stays small: libmkl_rt.so is *not* bundled — it is already
+#       present on any machine where `torch` was installed via PyPI.
+#  2. System FFTW3f + system CBLAS fallback (for CPU-only torch wheels, conda
+#     environments, or developer containers without the `mkl` package).
+#     In production, a manylinux build + `auditwheel repair` will bundle these.
 # ---------------------------------------------------------------------------
-find_library(FFTW3F_LIBRARY NAMES fftw3f REQUIRED
-    DOC "FFTW3 single-precision library")
-find_path(FFTW3F_INCLUDE_DIR NAMES fftw3.h REQUIRED
-    DOC "FFTW3 include directory")
-message(STATUS "Found FFTW3f: ${FFTW3F_LIBRARY}  (headers: ${FFTW3F_INCLUDE_DIR})")
 
-# ---------------------------------------------------------------------------
-# CBLAS — dynamic link; headers from system (OpenBLAS or generic).
-# BART's blas.c calls cblas_cgemm / cblas_cgemv / cblas_caxpy etc.
-# PyTorch's libtorch_cpu.so only exports MKL-style batch variants, so we
-# use the system BLAS shared library as the runtime provider.
-# TODO (Phase 1): when linking a full MKL-enabled PyTorch wheel, set
-#   USE_MKL and route BLAS through ${TORCH_LIBRARIES} instead.
-# ---------------------------------------------------------------------------
-find_library(CBLAS_LIBRARY NAMES openblas blas REQUIRED
-    DOC "CBLAS/BLAS library")
-find_path(CBLAS_INCLUDE_DIR NAMES cblas.h
-    PATH_SUFFIXES openblas
-    DOC "CBLAS include directory")
-message(STATUS "Found CBLAS: ${CBLAS_LIBRARY}  (headers: ${CBLAS_INCLUDE_DIR})")
+set(_use_mkl FALSE)
+
+# Step 1 — look for mkl-include (headers) from the Python package
+execute_process(
+    COMMAND "${Python3_EXECUTABLE}" -c
+        "import importlib.metadata as m, pathlib
+try:
+    d = m.distribution('mkl-include')
+    inc = (pathlib.Path(str(d.locate_file('.'))) / '../../../include').resolve()
+    if (inc / 'mkl.h').exists(): print(str(inc))
+    else: exit(1)
+except Exception: exit(1)"
+    OUTPUT_VARIABLE _mkl_include_dir
+    OUTPUT_STRIP_TRAILING_WHITESPACE
+    RESULT_VARIABLE _mkl_inc_ret
+    ERROR_QUIET
+)
+
+# Step 2 — look for libmkl_rt from the Python `mkl` package
+execute_process(
+    COMMAND "${Python3_EXECUTABLE}" -c
+        "import importlib.metadata as m, pathlib, glob
+try:
+    d = m.distribution('mkl')
+    lib = (pathlib.Path(str(d.locate_file('.'))) / '../../../lib').resolve()
+    candidates = sorted(glob.glob(str(lib / 'libmkl_rt.so*')))
+    if candidates: print(candidates[0])
+    else: exit(1)
+except Exception: exit(1)"
+    OUTPUT_VARIABLE _mkl_rt_lib
+    OUTPUT_STRIP_TRAILING_WHITESPACE
+    RESULT_VARIABLE _mkl_rt_ret
+    ERROR_QUIET
+)
+
+if(_mkl_inc_ret EQUAL 0 AND _mkl_rt_ret EQUAL 0
+   AND _mkl_include_dir AND _mkl_rt_lib)
+    # MKL path: single library covers both BLAS and FFTW3 (compatibility layer)
+    set(CBLAS_INCLUDE_DIR  "${_mkl_include_dir}")
+    set(CBLAS_LIBRARY      "${_mkl_rt_lib}")
+    set(FFTW3F_INCLUDE_DIR "${_mkl_include_dir}/fftw")
+    set(FFTW3F_LIBRARY     "${_mkl_rt_lib}")
+    list(APPEND BART_DEFS USE_MKL)
+    set(_use_mkl TRUE)
+    message(STATUS "BLAS+FFT: MKL from Python packages")
+    message(STATUS "  headers : ${_mkl_include_dir}")
+    message(STATUS "  runtime : ${_mkl_rt_lib}")
+else()
+    # System fallback
+    find_library(FFTW3F_LIBRARY NAMES fftw3f REQUIRED
+        DOC "FFTW3 single-precision library (fallback when mkl package absent)")
+    find_path(FFTW3F_INCLUDE_DIR NAMES fftw3.h REQUIRED
+        DOC "FFTW3 include directory")
+    find_library(CBLAS_LIBRARY NAMES openblas blas REQUIRED
+        DOC "CBLAS/BLAS library (fallback when mkl package absent)")
+    find_path(CBLAS_INCLUDE_DIR NAMES cblas.h
+        PATH_SUFFIXES openblas
+        DOC "CBLAS include directory")
+    message(STATUS "BLAS+FFT: system libraries (mkl Python package not found)")
+    message(STATUS "  FFTW3f : ${FFTW3F_LIBRARY}  (headers: ${FFTW3F_INCLUDE_DIR})")
+    message(STATUS "  CBLAS  : ${CBLAS_LIBRARY}  (headers: ${CBLAS_INCLUDE_DIR})")
+endif()
 
 # BART compile definitions
 set(BART_DEFS
@@ -270,8 +325,9 @@ target_include_directories(bart_static PUBLIC
 )
 target_compile_options(bart_static PRIVATE -fPIC -O2 -std=gnu11)
 
-# Link order: PyTorch (tensor ops + its own bundled BLAS symbols) → system CBLAS
-# → FFTW3f.  Both system libs are shared (.so) — not bundled in the wheel.
+# Link order: PyTorch (tensor ops) → MKL or system CBLAS+FFTW3.
+# When MKL path is active, CBLAS_LIBRARY and FFTW3F_LIBRARY both point to
+# libmkl_rt.so — a single lib that covers both BLAS and FFT.
 target_link_libraries(bart_static PUBLIC
     ${TORCH_LIBRARIES}
     ${CBLAS_LIBRARY}
@@ -303,7 +359,7 @@ endif()
 
 # Ensure the .so lands directly in the bartorch package directory so that
 # `from bartorch import _bartorch_ext` works for both editable and installed builds.
-# CMAKE_SOURCE_DIR = bartorch/csrc  →  ../ = bartorch/  (the Python package root).
+# CMAKE_SOURCE_DIR = src/bartorch/csrc  →  ../ = src/bartorch/  (package root).
 set_target_properties(_bartorch_ext PROPERTIES
     LIBRARY_OUTPUT_DIRECTORY "${CMAKE_SOURCE_DIR}/.."
 )

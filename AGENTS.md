@@ -75,38 +75,39 @@ tensor.  Requires BART compiled with `USE_CUDA=ON`.
 bartpy/                           ← repository root
 ├── bart/                         ← git submodule (mrirecon/bart, v1.0.00)
 │
-├── bartorch/                     ← main package
-│   ├── __init__.py
-│   ├── core/                     ← internal infrastructure
-│   │   ├── __init__.py
-│   │   ├── context.py            ← BartContext (in-memory CFL session)
-│   │   ├── graph.py              ← dispatch() — routes to C++ extension
-│   │   └── tensor.py             ← @bart_op decorator, _as_complex64, _reverse_dims
-│   │
-│   ├── ops/                      ← Internal abstract types only
-│   │   ├── __init__.py           ← exports: BartLinop
-│   │   └── linops.py             ← BartLinop (@, +, *, .H, .N)
-│   │
-│   ├── tools/                    ← User-facing CLI tool wrappers
-│   │   ├── __init__.py           ← exports all named tools
-│   │   ├── _commands.py          ← Pythonic overrides (fft/ifft, ecalib, caldir, pics, nlinv, moba, nufft)
-│   │   └── _generated.py         ← generated from BART source (committed)
-│   │
-│   ├── utils/
-│   │   ├── __init__.py           ← exports: readcfl, writecfl, axes_to_flags
-│   │   ├── cfl.py                ← NumPy CFL read/write
-│   │   └── flags.py              ← axes_to_flags(axes, ndim) → int bitmask
-│   │
-│   └── csrc/                     ← PyTorch C++ extension source
-│       ├── CMakeLists.txt
-│       ├── bartorch_ext.cpp      ← pybind11 module entry point
-│       ├── tensor_bridge.hpp     ← zero-copy torch.Tensor↔CFL (axis reversal)
-│       ├── bart_ops.cpp          ← named op implementations
-│       └── cuda/
-│           └── cuda_bridge.hpp   ← zero-copy CUDA tensor↔CFL
+├── src/
+│   └── bartorch/                 ← main package (src layout)
+│       ├── __init__.py
+│       ├── core/                     ← internal infrastructure
+│       │   ├── __init__.py
+│       │   ├── context.py            ← BartContext (in-memory CFL session)
+│       │   ├── graph.py              ← dispatch() — routes to C++ extension
+│       │   └── tensor.py             ← @bart_op decorator, _as_complex64, _reverse_dims
+│       │
+│       ├── ops/                      ← Internal abstract types only
+│       │   ├── __init__.py           ← exports: BartLinop
+│       │   └── linops.py             ← BartLinop (@, +, *, .H, .N)
+│       │
+│       ├── tools/                    ← User-facing CLI tool wrappers
+│       │   ├── __init__.py           ← exports all named tools
+│       │   ├── _commands.py          ← Pythonic overrides (fft/ifft, ecalib, caldir, pics, nlinv, moba, nufft)
+│       │   └── _generated.py         ← generated from BART source (committed)
+│       │
+│       ├── utils/
+│       │   ├── __init__.py           ← exports: readcfl, writecfl, axes_to_flags
+│       │   ├── cfl.py                ← NumPy CFL read/write
+│       │   └── flags.py              ← axes_to_flags(axes, ndim) → int bitmask
+│       │
+│       └── csrc/                     ← PyTorch C++ extension source
+│           ├── CMakeLists.txt
+│           ├── bartorch_ext.cpp      ← pybind11 module entry point
+│           ├── tensor_bridge.hpp     ← zero-copy torch.Tensor↔CFL (axis reversal)
+│           ├── bart_ops.cpp          ← named op implementations
+│           └── cuda/
+│               └── cuda_bridge.hpp   ← zero-copy CUDA tensor↔CFL
 │
 ├── build_tools/
-│   └── gen_tools.py              ← generates bartorch/tools/_generated.py
+│   └── gen_tools.py              ← generates src/bartorch/tools/_generated.py
 │
 ├── tests/
 │   ├── test_cfl.py
@@ -191,7 +192,7 @@ bt.pics(kspace, sens,
 
 ### 4.5 Auto-generated CLI wrapper suite
 
-`build_tools/gen_tools.py` generates `bartorch/tools/_generated.py` at build
+`build_tools/gen_tools.py` generates `src/bartorch/tools/_generated.py` at build
 time by **parsing the BART C source files** in the `bart/src/` submodule.  It
 never calls a system `bart` binary.
 
@@ -232,7 +233,7 @@ To regenerate after a BART submodule update:
 ```bash
 python build_tools/gen_tools.py
 # Optional: specify paths explicitly
-python build_tools/gen_tools.py --bart-src bart/src --out bartorch/tools/_generated.py
+python build_tools/gen_tools.py --bart-src bart/src --out src/bartorch/tools/_generated.py
 ```
 
 If ``bart/src/`` is absent (submodule not initialised), the script aborts
@@ -281,7 +282,7 @@ with bart_context():
 ## 6. Build System
 
 - **Backend:** `scikit-build-core >= 0.9`
-- **CMake source:** `bartorch/csrc/CMakeLists.txt`
+- **CMake source:** `src/bartorch/csrc/CMakeLists.txt`
 - **PyTorch integration:** self-detects `torch.utils.cmake_prefix_path`
 - **BART static lib:** compiled from selected source files (not the full suite)
 - **BLAS/FFT:** reuses PyTorch's bundled MKL / OpenBLAS / cuFFT

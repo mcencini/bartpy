@@ -70,9 +70,9 @@ set(BART_SRC_DIR "${CMAKE_SOURCE_DIR}/../../bart/src")
 # ---------------------------------------------------------------------------
 find_library(FFTW3F_LIBRARY NAMES fftw3f REQUIRED
     DOC "FFTW3 single-precision library")
-find_path(FFTW3_INCLUDE_DIR NAMES fftw3.h REQUIRED
+find_path(FFTW3F_INCLUDE_DIR NAMES fftw3.h REQUIRED
     DOC "FFTW3 include directory")
-message(STATUS "Found FFTW3f: ${FFTW3F_LIBRARY}  (headers: ${FFTW3_INCLUDE_DIR})")
+message(STATUS "Found FFTW3f: ${FFTW3F_LIBRARY}  (headers: ${FFTW3F_INCLUDE_DIR})")
 
 # ---------------------------------------------------------------------------
 # CBLAS — dynamic link; headers from system (OpenBLAS or generic).
@@ -172,7 +172,7 @@ if(NOT EXISTS "${BART_MAINLIST_INC}")
         # tool with a main_xxx entry point.  Build one flat MAIN_LIST that
         # bart.c can compile.  The category sub-lists are satisfied with
         # empty definitions so the dispatch_table still compiles.
-        message(STATUS "Generating ${BART_MAINLIST_INC} via CMake file scan "
+        message(STATUS "Generating ${BART_MAINLIST_INC} via CMake file scanning "
                        "(make src/mainlist.inc was incomplete)")
         file(GLOB _bart_tool_srcs "${BART_SRC_DIR}/*.c")
         set(_tool_names "")
@@ -265,7 +265,7 @@ target_compile_definitions(bart_static PUBLIC ${BART_DEFS})
 target_include_directories(bart_static PUBLIC
     ${BART_SRC_DIR}
     ${Python3_INCLUDE_DIRS}
-    ${FFTW3_INCLUDE_DIR}
+    ${FFTW3F_INCLUDE_DIR}
     ${CBLAS_INCLUDE_DIR}
 )
 target_compile_options(bart_static PRIVATE -fPIC -O2 -std=gnu11)

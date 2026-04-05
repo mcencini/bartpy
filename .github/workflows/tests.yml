@@ -65,11 +65,5 @@ jobs:
       - name: Build and install bartorch (compiles C++ extension with BART)
         run: pip install -e . --no-build-isolation
 
-      - name: Smoke test — import extension and run pytest ext tests
-        run: |
-          python - <<'EOF'
-          from bartorch import _bartorch_ext
-          print("_bartorch_ext imported successfully")
-          print(dir(_bartorch_ext))
-          EOF
-          pytest tests/test_ext.py -v
+      - name: Smoke test — run extension tests
+        run: pytest tests/test_ext.py -v

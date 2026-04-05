@@ -79,12 +79,13 @@ def test_finufft_wrap_symbols():
     import bartorch._bartorch_ext as ext  # noqa: F401
 
     import bartorch
+
     matches = glob.glob(str(pathlib.Path(bartorch.__file__).parent / "_bartorch_ext*.so"))
     if not matches:
         pytest.skip("Cannot locate _bartorch_ext.so to inspect symbols")
 
     lib = ctypes.CDLL(matches[0])
-    assert hasattr(lib, "__wrap_grid2"),  "__wrap_grid2 symbol missing from _bartorch_ext.so"
+    assert hasattr(lib, "__wrap_grid2"), "__wrap_grid2 symbol missing from _bartorch_ext.so"
     assert hasattr(lib, "__wrap_grid2H"), "__wrap_grid2H symbol missing from _bartorch_ext.so"
 
 
@@ -99,6 +100,7 @@ def test_rolloff_wrap_symbols():
     import pathlib
 
     import bartorch
+
     matches = glob.glob(str(pathlib.Path(bartorch.__file__).parent / "_bartorch_ext*.so"))
     if not matches:
         pytest.skip("Cannot locate _bartorch_ext.so to inspect symbols")
@@ -121,10 +123,9 @@ def test_rolloff_wrap_symbols():
 #   - Weights are symmetric around the grid centre
 #   - Weight is monotonically decreasing from centre toward ±Nyquist
 # ---------------------------------------------------------------------------
-def _es_rolloff_weight(xi_cps: float,
-                       beta: float = 2.30 * 7.0,
-                       hw: float = 7.0 / 2.0,
-                       nquad: int = 256) -> float:
+def _es_rolloff_weight(
+    xi_cps: float, beta: float = 2.30 * 7.0, hw: float = 7.0 / 2.0, nquad: int = 256
+) -> float:
     """Python replica of esro_hat_phi / esro_weight from finufft_grid.cpp."""
     h = hw / nquad
     total = 0.0
@@ -141,8 +142,8 @@ def _es_rolloff_weight(xi_cps: float,
 def test_es_rolloff_dc_weight():
     """ES rolloff weight at DC is a finite positive float < 1."""
     w_dc = _es_rolloff_weight(0.0)
-    assert w_dc > 0.0,  f"DC weight should be positive, got {w_dc}"
-    assert w_dc < 1.0,  f"DC weight should be < 1 (ES kernel peak >> 1), got {w_dc}"
+    assert w_dc > 0.0, f"DC weight should be positive, got {w_dc}"
+    assert w_dc < 1.0, f"DC weight should be < 1 (ES kernel peak >> 1), got {w_dc}"
     assert math.isfinite(w_dc), "DC weight must be finite"
 
 
@@ -166,7 +167,7 @@ def test_es_rolloff_monotone():
     weights = [_es_rolloff_weight(xi) for xi in xis]
     for i in range(len(weights) - 1):
         assert weights[i] <= weights[i + 1] + 1e-6, (
-            f"Rolloff weight not monotone at index {i}: {weights[i]} > {weights[i+1]}"
+            f"Rolloff weight not monotone at index {i}: {weights[i]} > {weights[i + 1]}"
         )
 
 
@@ -178,6 +179,7 @@ def _run_available() -> bool:
         return False
     try:
         import bartorch._bartorch_ext as ext
+
         # Probe whether run() is wired up by attempting a call with dummy args.
         # An unimplemented run() raises RuntimeError("not yet implemented").
         # Any other outcome (including other exceptions from bad args) means
@@ -218,7 +220,7 @@ def test_adjointness_2d():
 
     # Random radial trajectory in [-0.5, 0.5] × Nx (BART units)
     angles = torch.linspace(0, math.pi, n_spokes)
-    r      = torch.linspace(-n_ro / 2, n_ro / 2, n_ro)
+    r = torch.linspace(-n_ro / 2, n_ro / 2, n_ro)
     traj_x = torch.outer(torch.cos(angles), r).reshape(-1)
     traj_y = torch.outer(torch.sin(angles), r).reshape(-1)
     traj_z = torch.zeros(M)
@@ -230,10 +232,10 @@ def test_adjointness_2d():
     # Random grid (oversampled image) and k-space data
     os = 2
     grid = torch.randn(Nx * os, Ny * os, 1, 1, dtype=torch.complex64)
-    ksp  = torch.randn(1, n_ro, n_spokes, 1, dtype=torch.complex64)
+    ksp = torch.randn(1, n_ro, n_spokes, 1, dtype=torch.complex64)
 
     # grid2H: grid → kspace
-    Ag_ksp = bt.tools.gridH(traj, grid)          # placeholder names; adjust for actual API
+    Ag_ksp = bt.tools.gridH(traj, grid)  # placeholder names; adjust for actual API
     # grid2: kspace → grid
     AH_ksp_g = bt.tools.grid(traj, ksp)
 
@@ -264,14 +266,12 @@ def test_adjointness_3d():
 
     os = 2
     grid = torch.randn(N * os, N * os, N * os, 1, dtype=torch.complex64)
-    ksp  = torch.randn(1, M, 1, 1, dtype=torch.complex64)
+    ksp = torch.randn(1, M, 1, 1, dtype=torch.complex64)
 
-    Ag_ksp   = bt.tools.gridH(traj, grid)
+    Ag_ksp = bt.tools.gridH(traj, grid)
     AH_ksp_g = bt.tools.grid(traj, ksp)
 
     lhs = (Ag_ksp * ksp.conj()).sum().real
     rhs = (AH_ksp_g * grid.conj()).sum().real
     rel_err = abs(float(lhs - rhs)) / (float(Ag_ksp.norm()) * float(ksp.norm()))
     assert rel_err < 1e-4, f"3-D adjointness error {rel_err:.2e} exceeds 1e-4"
-
-

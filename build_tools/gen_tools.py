@@ -63,31 +63,79 @@ _TOOL_CATEGORIES: dict[str, list[str]] = {
     "Coil Processing": ["coils", "cc", "ccapply", "walsh", "whiten", "rss"],
     "Calibration": ["ecalib", "caldir", "calmat", "ecaltwo", "estvar", "estdims"],
     "Image Processing": [
-        "resize", "reshape", "crop", "flip", "circshift", "transpose",
-        "repmat", "join", "split", "extract", "squeeze", "flatten",
-        "copy", "slice", "fmac", "scale", "saxpy",
+        "resize",
+        "reshape",
+        "crop",
+        "flip",
+        "circshift",
+        "transpose",
+        "repmat",
+        "join",
+        "split",
+        "extract",
+        "squeeze",
+        "flatten",
+        "copy",
+        "slice",
+        "fmac",
+        "scale",
+        "saxpy",
     ],
     "Wavelets / Sparsity": ["wavelet", "cdf97", "threshold", "tgv", "rof"],
     "Low-Rank / Subspace": ["svd", "lrmatrix", "casorati", "ssa"],
     "Iterative Algorithms": [
-        "pics", "pocsense", "itsense", "sake", "nlinv", "moba", "mobafit",
+        "pics",
+        "pocsense",
+        "itsense",
+        "sake",
+        "nlinv",
+        "moba",
+        "mobafit",
         "irgnm",
     ],
     "Utilities": [
-        "bitmask", "avg", "noise", "nrmse", "normalize", "std", "sdot",
-        "zeros", "delta", "ones", "rand", "randn",
-        "cabs", "carg", "creal", "conj", "cpyphs",
-        "spow", "zexp", "poly", "calc", "invert",
-        "window", "filter", "homodyne",
-        "rmfreq", "mandelbrot",
+        "bitmask",
+        "avg",
+        "noise",
+        "nrmse",
+        "normalize",
+        "std",
+        "sdot",
+        "zeros",
+        "delta",
+        "ones",
+        "rand",
+        "randn",
+        "cabs",
+        "carg",
+        "creal",
+        "conj",
+        "cpyphs",
+        "spow",
+        "zexp",
+        "poly",
+        "calc",
+        "invert",
+        "window",
+        "filter",
+        "homodyne",
+        "rmfreq",
+        "mandelbrot",
     ],
 }
 
 # Tools whose BART implementation supports GPU via the -g flag
-_GPU_CAPABLE_TOOLS: frozenset[str] = frozenset({
-    "nlinv", "moba", "mobafit", "nufft", "nufftbase",
-    "pocsense", "itsense",
-})
+_GPU_CAPABLE_TOOLS: frozenset[str] = frozenset(
+    {
+        "nlinv",
+        "moba",
+        "mobafit",
+        "nufft",
+        "nufftbase",
+        "pocsense",
+        "itsense",
+    }
+)
 
 
 def _cuda_note(tool_name: str, opts: list) -> str:
@@ -106,55 +154,71 @@ def _cuda_note(tool_name: str, opts: list) -> str:
         "        CPU before dispatch and returned to the original device.\n"
     )
 
+
 # ---------------------------------------------------------------------------
 # BART OPT type → (Python annotation, default value string)
 # ---------------------------------------------------------------------------
 
 _OPT_TYPE_MAP: dict[str, tuple[str, str]] = {
-    "bool":      ("bool",                         "False"),
-    "INT":       ("int | None",                   "None"),
-    "UINT":      ("int | None",                   "None"),
-    "LONG":      ("int | None",                   "None"),
-    "ULONG":     ("int | None",                   "None"),
-    "ULLONG":    ("int | None",                   "None"),
-    "PINT":      ("int | None",                   "None"),
-    "FLOAT":     ("float | None",                 "None"),
-    "DOUBLE":    ("float | None",                 "None"),
-    "STRING":    ("str | None",                   "None"),
-    "INFILE":    ("str | None",                   "None"),
-    "OUTFILE":   ("str | None",                   "None"),
-    "INOUTFILE": ("str | None",                   "None"),
-    "VEC2":      ("tuple[int, int] | None",        "None"),
-    "VEC3":      ("tuple[int, int, int] | None",   "None"),
-    "VECN":      ("tuple[int, ...] | None",        "None"),
-    "FLVEC2":    ("tuple[float, float] | None",    "None"),
-    "FLVEC3":    ("tuple[float, float, float] | None", "None"),
-    "FLVEC4":    ("tuple[float, float, float, float] | None", "None"),
-    "FLVECN":    ("tuple[float, ...] | None",      "None"),
+    "bool": ("bool", "False"),
+    "INT": ("int | None", "None"),
+    "UINT": ("int | None", "None"),
+    "LONG": ("int | None", "None"),
+    "ULONG": ("int | None", "None"),
+    "ULLONG": ("int | None", "None"),
+    "PINT": ("int | None", "None"),
+    "FLOAT": ("float | None", "None"),
+    "DOUBLE": ("float | None", "None"),
+    "STRING": ("str | None", "None"),
+    "INFILE": ("str | None", "None"),
+    "OUTFILE": ("str | None", "None"),
+    "INOUTFILE": ("str | None", "None"),
+    "VEC2": ("tuple[int, int] | None", "None"),
+    "VEC3": ("tuple[int, int, int] | None", "None"),
+    "VECN": ("tuple[int, ...] | None", "None"),
+    "FLVEC2": ("tuple[float, float] | None", "None"),
+    "FLVEC3": ("tuple[float, float, float] | None", "None"),
+    "FLVEC4": ("tuple[float, float, float, float] | None", "None"),
+    "FLVECN": ("tuple[float, ...] | None", "None"),
 }
 
 # ARG types that represent CFL / tensor inputs
-_TENSOR_ARG_TYPES: frozenset[str] = frozenset(
-    {"INFILE", "OUTFILE", "INOUTFILE", "CFL"}
-)
+_TENSOR_ARG_TYPES: frozenset[str] = frozenset({"INFILE", "OUTFILE", "INOUTFILE", "CFL"})
 
 # ARG types that represent plain-value positional args (not tensors)
 _VALUE_ARG_TYPE_MAP: dict[str, str] = {
     "ULONG": "int",
-    "LONG":  "int",
-    "INT":   "int",
-    "UINT":  "int",
+    "LONG": "int",
+    "INT": "int",
+    "UINT": "int",
     "FLOAT": "float",
     "STRING": "str",
-    "VEC2":  "tuple[int, int]",
-    "VEC3":  "tuple[int, int, int]",
+    "VEC2": "tuple[int, int]",
+    "VEC3": "tuple[int, int, int]",
 }
 
 # Python keywords and common builtins that need renaming
 _PYTHON_RESERVED: frozenset[str] = frozenset(
     set(keyword.kwlist)
-    | {"input", "type", "list", "dict", "set", "id", "map", "filter",
-       "min", "max", "sum", "len", "all", "any", "zip", "range", "help"}
+    | {
+        "input",
+        "type",
+        "list",
+        "dict",
+        "set",
+        "id",
+        "map",
+        "filter",
+        "min",
+        "max",
+        "sum",
+        "len",
+        "all",
+        "any",
+        "zip",
+        "range",
+        "help",
+    }
 )
 
 
@@ -215,6 +279,7 @@ def _parse_tool_source(tool_name: str, src_path: Path) -> dict:
         - ``\\\\`` (C escaped backslash) → ``\\\\`` (escaped for Python docstring)
         - Any other ``\\X`` → ``\\\\X`` (escape the backslash for docstring safety)
         """
+
         def _replace(m: re.Match) -> str:
             c = m.group(1)
             if c in "nrtfv":
@@ -228,14 +293,16 @@ def _parse_tool_source(tool_name: str, src_path: Path) -> dict:
     # 1. Description (help_str)
     m = re.search(
         r'static\s+const\s+char\s+help_str\[\]\s*=\s*"((?:[^"\\]|\\.)*?)"',
-        code, re.DOTALL,
+        code,
+        re.DOTALL,
     )
     help_str = _clean_c_str(m.group(1)) if m else ""
 
     # 2. Positional args (struct arg_s args[] = { ... };)
     args_m = re.search(
         r"struct\s+arg_s\s+args\s*\[\s*\]\s*=\s*\{(.*?)\};",
-        code, re.DOTALL,
+        code,
+        re.DOTALL,
     )
     tensor_inputs: list[tuple[str]] = []
     value_args: list[tuple[str, str, str]] = []
@@ -255,7 +322,8 @@ def _parse_tool_source(tool_name: str, src_path: Path) -> dict:
     # 3. Named options (const struct opt_s opts[] = { ... };)
     opts_m = re.search(
         r"const\s+struct\s+opt_s\s+opts\s*\[\s*\]\s*=\s*\{(.*?)\};",
-        code, re.DOTALL,
+        code,
+        re.DOTALL,
     )
     opts: list[tuple[str, str, str, str, str]] = []
     seen_keys: set[str] = set()
@@ -293,8 +361,7 @@ def _parse_tool_source(tool_name: str, src_path: Path) -> dict:
 
         # OPTL_SET / OPTL_CLEAR  (char_or_0, long_name, ptr, descr)
         for m in re.finditer(
-            r"OPTL_(?:SET|CLEAR)\s*\(\s*(?:'([^']+)'|0)\s*,\s*"
-            + _CSTR + r"\s*,[^,]+,\s*" + _CSTR,
+            r"OPTL_(?:SET|CLEAR)\s*\(\s*(?:'([^']+)'|0)\s*,\s*" + _CSTR + r"\s*,[^,]+,\s*" + _CSTR,
             block,
         ):
             char = m.group(1) or ""
@@ -309,7 +376,11 @@ def _parse_tool_source(tool_name: str, src_path: Path) -> dict:
             r"STRING|INFILE|OUTFILE|INOUTFILE|"
             r"VEC2|VEC3|VECN|FLVEC2|FLVEC3|FLVEC4|FLVECN"
             r")\s*\(\s*(?:'([^']+)'|0)\s*,\s*"
-            + _CSTR + r"\s*,[^,]+,\s*" + _CSTR + r"\s*,\s*" + _CSTR,
+            + _CSTR
+            + r"\s*,[^,]+,\s*"
+            + _CSTR
+            + r"\s*,\s*"
+            + _CSTR,
             block,
         ):
             char = m.group(2) or ""
@@ -356,9 +427,9 @@ def _generate_func(info: dict) -> str:
     """Return the Python source for one generated function."""
     name = info["name"]
     safe_name = name.replace("-", "_")
-    tensor_inputs = info["tensor_inputs"]   # [(argname,), ...]
-    value_args = info["value_args"]         # [(py_type, py_key, orig_name), ...]
-    opts = info["opts"]                     # [(py_type, py_key, orig_key, argname, descr), ...]
+    tensor_inputs = info["tensor_inputs"]  # [(argname,), ...]
+    value_args = info["value_args"]  # [(py_type, py_key, orig_name), ...]
+    opts = info["opts"]  # [(py_type, py_key, orig_key, argname, descr), ...]
     help_str = info["help"]
 
     lines: list[str] = []
@@ -429,9 +500,9 @@ def _generate_func(info: dict) -> str:
             flag_str += f" {argname}"
         doc_lines.append(f"    {py_key} : {type_hint}")
         wrapped_descr = textwrap.fill(
-            f"        BART flag ``{flag_str}``: {descr.strip()} "
-            f"Default ``{default}``.",
-            width=79, subsequent_indent="        ",
+            f"        BART flag ``{flag_str}``: {descr.strip()} Default ``{default}``.",
+            width=79,
+            subsequent_indent="        ",
         )
         doc_lines.append(wrapped_descr)
 
@@ -450,6 +521,10 @@ def _generate_func(info: dict) -> str:
     tensor_arg_names = [_to_py_ident(a[0]) for a in tensor_inputs]
     inputs_expr = "[" + ", ".join(tensor_arg_names) + "]"
 
+    # Positional scalar args (e.g. bitmask for fft) go in _pos=[…] so that
+    # run() can insert them into argv *without* a -flag prefix.
+    pos_expr = "[" + ", ".join(py_key for _, py_key, _ in value_args) + "]"
+
     # Build the explicit kwargs dict passed to dispatch.
     # Bool opts: pass as `True` only when set (truthy check).
     # Optional opts: pass through as-is (None is ignored by dispatch).
@@ -460,21 +535,17 @@ def _generate_func(info: dict) -> str:
         else:
             kw_parts.append(f"{py_key}={py_key}")
 
-    # Also include positional non-tensor args as kwargs so dispatch can
-    # place them in the correct argv position.
-    for _py_type, py_key, orig_name in value_args:
-        kw_parts.append(f"{py_key}={py_key}")
-
     kw_str = ", ".join(kw_parts)
+    pos_arg = f"_pos={pos_expr}, " if value_args else ""
     if kw_str:
         body = (
             f"    return dispatch({name!r}, {inputs_expr}, output_dims,\n"
-            f"                    {kw_str}, **extra_flags)"
+            f"                    {pos_arg}{kw_str}, **extra_flags)"
         )
     else:
         body = (
             f"    return dispatch({name!r}, {inputs_expr}, output_dims,\n"
-            f"                    **extra_flags)"
+            f"                    {pos_arg}**extra_flags)"
         )
 
     lines.append(body)
@@ -536,17 +607,13 @@ def _generate_file(out_path: Path, bart_src: Path | None) -> None:
             categorised.update(t for t in cat_tools if t in tool_set)
             entries = "\n".join(f"   {t}" for t in in_cat)
             autosummary_sections.append(
-                f".. rubric:: {cat_name}\n\n"
-                f".. autosummary::\n   :nosignatures:\n\n"
-                f"{entries}\n"
+                f".. rubric:: {cat_name}\n\n.. autosummary::\n   :nosignatures:\n\n{entries}\n"
             )
     misc_tools = [t.replace("-", "_") for t in emit_tools if t not in categorised]
     if misc_tools:
         entries = "\n".join(f"   {t}" for t in misc_tools)
         autosummary_sections.append(
-            f".. rubric:: Miscellaneous\n\n"
-            f".. autosummary::\n   :nosignatures:\n\n"
-            f"{entries}\n"
+            f".. rubric:: Miscellaneous\n\n.. autosummary::\n   :nosignatures:\n\n{entries}\n"
         )
     sphinx_toc = "\n".join(autosummary_sections)
 
@@ -565,9 +632,7 @@ def _generate_file(out_path: Path, bart_src: Path | None) -> None:
         "* Carry a CUDA compatibility note in their docstring.\n"
         "\n"
         f"Source-based generation: {source_note}\n"
-        "\n"
-        + sphinx_toc
-        + '\n"""\n'
+        "\n" + sphinx_toc + '\n"""\n'
         "\n"
         "from __future__ import annotations\n"
         "\n"
@@ -615,20 +680,99 @@ def _generate_file(out_path: Path, bart_src: Path | None) -> None:
 # ---------------------------------------------------------------------------
 
 _FALLBACK_TOOLS: list[str] = [
-    "affinereg", "avg", "bitmask", "bloch", "cabs", "calc",
-    "caldir", "calmat", "carg", "casorati", "cc", "ccapply", "cdf97",
-    "circshift", "coils", "compress", "conj", "conv", "copy", "cpyphs",
-    "creal", "crop", "delta", "ecalib", "ecaltwo", "estdelay", "estdims",
-    "estmat", "estvar", "extract", "fft", "fftmod", "fftshift", "filter",
-    "flatten", "flip", "fmac", "homodyne", "invert", "itsense", "join",
-    "looklocker", "lrmatrix", "mandelbrot", "meanshape", "moba", "mobafit",
-    "morphop", "multicfl", "nlinv", "noise", "normalize", "nrmse", "nufft",
-    "nufftbase", "onehotenc", "pattern", "phantom", "pics", "pocsense",
-    "poisson", "poly", "repmat", "reshape", "resize", "rmfreq", "rof", "rss",
-    "sake", "saxpy", "scale", "sdot", "signal", "slice", "spow", "squeeze",
-    "ssa", "std", "svd", "tgv", "threshold", "traj", "transpose", "twixread",
-    "upat", "walsh", "wave", "wavelet", "wavepsf", "whiten", "window",
-    "zeros", "zexp",
+    "affinereg",
+    "avg",
+    "bitmask",
+    "bloch",
+    "cabs",
+    "calc",
+    "caldir",
+    "calmat",
+    "carg",
+    "casorati",
+    "cc",
+    "ccapply",
+    "cdf97",
+    "circshift",
+    "coils",
+    "compress",
+    "conj",
+    "conv",
+    "copy",
+    "cpyphs",
+    "creal",
+    "crop",
+    "delta",
+    "ecalib",
+    "ecaltwo",
+    "estdelay",
+    "estdims",
+    "estmat",
+    "estvar",
+    "extract",
+    "fft",
+    "fftmod",
+    "fftshift",
+    "filter",
+    "flatten",
+    "flip",
+    "fmac",
+    "homodyne",
+    "invert",
+    "itsense",
+    "join",
+    "looklocker",
+    "lrmatrix",
+    "mandelbrot",
+    "meanshape",
+    "moba",
+    "mobafit",
+    "morphop",
+    "multicfl",
+    "nlinv",
+    "noise",
+    "normalize",
+    "nrmse",
+    "nufft",
+    "nufftbase",
+    "onehotenc",
+    "pattern",
+    "phantom",
+    "pics",
+    "pocsense",
+    "poisson",
+    "poly",
+    "repmat",
+    "reshape",
+    "resize",
+    "rmfreq",
+    "rof",
+    "rss",
+    "sake",
+    "saxpy",
+    "scale",
+    "sdot",
+    "signal",
+    "slice",
+    "spow",
+    "squeeze",
+    "ssa",
+    "std",
+    "svd",
+    "tgv",
+    "threshold",
+    "traj",
+    "transpose",
+    "twixread",
+    "upat",
+    "walsh",
+    "wave",
+    "wavelet",
+    "wavepsf",
+    "whiten",
+    "window",
+    "zeros",
+    "zexp",
 ]
 
 

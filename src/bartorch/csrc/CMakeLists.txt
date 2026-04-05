@@ -69,6 +69,10 @@ set(BART_DEFS
     # In-memory tensor registration uses names with the ".mem" suffix (e.g.
     # "input.mem"), which BART routes through the memory CFL subsystem at
     # runtime regardless of the MEMONLY_CFL compile flag.
+    # NOTE: NOLAPACKE is intentionally NOT set. With USE_MKL (set below when
+    # MKL is detected), num/lapack.c includes <mkl.h> via "#elif USE_MKL".
+    # NOLAPACKE would override that branch and pull in bart/src/lapacke/*.h
+    # which in turn needs system lapack.h — not available without LAPACK dev headers.
 )
 if(USE_CUDA)
     list(APPEND BART_DEFS USE_CUDA)
@@ -416,14 +420,42 @@ endif()
 #                     #ifdef USE_CUDA so they compile cleanly as no-ops.
 #   (no USE_MPI)   — num/mpi_ops.c guards all symbols with #ifdef USE_MPI.
 # ---------------------------------------------------------------------------
-file(GLOB _bart_misc_srcs   "${BART_SRC_DIR}/misc/*.c")
-file(GLOB _bart_num_srcs    "${BART_SRC_DIR}/num/*.c")
-file(GLOB _bart_simu_srcs   "${BART_SRC_DIR}/simu/*.c")
-file(GLOB _bart_linops_srcs "${BART_SRC_DIR}/linops/*.c")
+file(GLOB _bart_misc_srcs    "${BART_SRC_DIR}/misc/*.c")
+file(GLOB _bart_num_srcs     "${BART_SRC_DIR}/num/*.c")
+file(GLOB _bart_simu_srcs    "${BART_SRC_DIR}/simu/*.c")
+file(GLOB _bart_linops_srcs  "${BART_SRC_DIR}/linops/*.c")
 file(GLOB _bart_wavelet_srcs "${BART_SRC_DIR}/wavelet/*.c")
-file(GLOB _bart_iter_srcs   "${BART_SRC_DIR}/iter/*.c")
-file(GLOB _bart_nlops_srcs  "${BART_SRC_DIR}/nlops/*.c")
+file(GLOB _bart_iter_srcs    "${BART_SRC_DIR}/iter/*.c")
+file(GLOB _bart_nlops_srcs   "${BART_SRC_DIR}/nlops/*.c")
 file(GLOB _bart_noncart_srcs "${BART_SRC_DIR}/noncart/*.c")
+file(GLOB _bart_calib_srcs   "${BART_SRC_DIR}/calib/*.c")
+file(GLOB _bart_grecon_srcs  "${BART_SRC_DIR}/grecon/*.c")
+file(GLOB _bart_lowrank_srcs "${BART_SRC_DIR}/lowrank/*.c")
+file(GLOB _bart_networks_srcs "${BART_SRC_DIR}/networks/*.c")
+file(GLOB _bart_nn_srcs      "${BART_SRC_DIR}/nn/*.c")
+file(GLOB _bart_noir_srcs    "${BART_SRC_DIR}/noir/*.c")
+file(GLOB _bart_sense_srcs   "${BART_SRC_DIR}/sense/*.c")
+file(GLOB _bart_motion_srcs  "${BART_SRC_DIR}/motion/*.c")
+file(GLOB _bart_moba_srcs    "${BART_SRC_DIR}/moba/*.c")
+file(GLOB _bart_sake_srcs    "${BART_SRC_DIR}/sake/*.c")
+file(GLOB _bart_geom_srcs    "${BART_SRC_DIR}/geom/*.c")
+file(GLOB _bart_seq_srcs     "${BART_SRC_DIR}/seq/*.c")
+file(GLOB _bart_stl_srcs     "${BART_SRC_DIR}/stl/*.c")
+# Top-level tool files: each bart/src/<tool>.c provides main_<tool>()
+# as well as the main dispatcher (bart.c) and entry-point wrapper (main.c).
+file(GLOB _bart_tools_srcs   "${BART_SRC_DIR}/*.c")
+
+# Exclude files that require external optional libraries without #ifdef guards:
+#
+# ismrmrd.c       — includes ismrm/read.h → ismrmrd/ismrmrd.h (libismrmrd).
+#                   BART's Makefile only adds this when ISMRM_BASE is set.
+# ismrm/read.c    — same reason (libismrmrd).
+# win/*.c         — Windows POSIX compatibility shims (mmap, fmemopen) that
+#                   redefine POSIX functions already present on Linux/macOS.
+# lapacke/*.c     — BART's bundled LAPACKE shim: requires system lapack.h.
+#                   With MKL (USE_MKL=1) LAPACKE is provided by libmkl_rt.so;
+#                   we don't need the bundled implementation.
+list(REMOVE_ITEM _bart_tools_srcs "${BART_SRC_DIR}/ismrmrd.c")
 
 set(BART_SOURCES
     ${_bart_misc_srcs}
@@ -434,9 +466,23 @@ set(BART_SOURCES
     ${_bart_iter_srcs}
     ${_bart_nlops_srcs}
     ${_bart_noncart_srcs}
-    # embed API + main dispatcher (top-level, not in a module directory)
-    ${BART_SRC_DIR}/main.c
-    ${BART_SRC_DIR}/bart.c
+    ${_bart_calib_srcs}
+    ${_bart_grecon_srcs}
+    ${_bart_lowrank_srcs}
+    ${_bart_networks_srcs}
+    ${_bart_nn_srcs}
+    ${_bart_noir_srcs}
+    ${_bart_sense_srcs}
+    ${_bart_motion_srcs}
+    ${_bart_moba_srcs}
+    ${_bart_sake_srcs}
+    ${_bart_geom_srcs}
+    ${_bart_seq_srcs}
+    ${_bart_stl_srcs}
+    ${_bart_tools_srcs}
+    # ismrm/read.c is intentionally excluded (requires libismrmrd).
+    # win/*.c is intentionally excluded (Windows-only POSIX shims).
+    # lapacke/*.c is intentionally excluded (MKL provides LAPACKE).
 )
 
 add_library(bart_static STATIC ${BART_SOURCES})
@@ -465,6 +511,31 @@ endif()
 # ---------------------------------------------------------------------------
 # _bartorch_ext Python extension module
 # ---------------------------------------------------------------------------
+
+# Find libtorch_python.so — it contains pybind11 type_caster specialisations
+# for at::Tensor.  find_package(Torch) does NOT add it to TORCH_LIBRARIES, but
+# any extension that converts Python objects ↔ torch.Tensor must link it.
+find_library(TORCH_PYTHON_LIBRARY
+    NAMES torch_python
+    PATHS "${TORCH_INSTALL_PREFIX}/lib"
+    NO_DEFAULT_PATH
+)
+if(NOT TORCH_PYTHON_LIBRARY)
+    # Fallback: search inside the torch package directory discovered during
+    # MKL detection (same parent as site-packages/torch/lib/).
+    find_library(TORCH_PYTHON_LIBRARY
+        NAMES torch_python
+        PATHS "${_mkl_site_packages}/torch/lib"
+        NO_DEFAULT_PATH
+    )
+endif()
+if(TORCH_PYTHON_LIBRARY)
+    message(STATUS "Found libtorch_python: ${TORCH_PYTHON_LIBRARY}")
+else()
+    message(WARNING "libtorch_python not found — torch.Tensor pybind11 "
+                    "type_casters may be unresolved at import time")
+endif()
+
 pybind11_add_module(_bartorch_ext
     bartorch_ext.cpp
     bart_ops.cpp
@@ -475,7 +546,11 @@ target_include_directories(_bartorch_ext PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}
     ${BART_SRC_DIR}
 )
-target_link_libraries(_bartorch_ext PRIVATE bart_static ${TORCH_LIBRARIES})
+target_link_libraries(_bartorch_ext PRIVATE
+    bart_static
+    ${TORCH_LIBRARIES}
+    ${TORCH_PYTHON_LIBRARY}
+)
 target_compile_definitions(_bartorch_ext PRIVATE ${BART_DEFS})
 
 if(BARTORCH_USE_FINUFFT)

@@ -79,6 +79,7 @@ def dispatch(
     op_name: str,
     inputs: list[Any],
     output_dims: list[int] | None,
+    _pos: list[Any] | None = None,
     **kwargs,
 ) -> torch.Tensor | tuple[torch.Tensor, ...]:
     """Route *op_name* through the C++ extension.
@@ -93,6 +94,12 @@ def dispatch(
         :func:`~bartorch.core.tensor.bart_op`.
     output_dims:
         Expected output shape, or ``None`` to infer at runtime.
+    _pos:
+        Ordered list of positional scalar arguments (e.g. ``[bitmask]``
+        for ``fft``).  These are inserted in argv between the flags and
+        the input CFL filenames.  ``None`` values in the list are ignored.
+        Not intended to be used by callers directly — populated automatically
+        by the generated op wrappers.
     **kwargs:
         Flag / scalar arguments forwarded to the BART command string.
         Boolean ``True`` values produce bare flags; numeric or string values
@@ -112,4 +119,4 @@ def dispatch(
     """
     ext = _get_ext()
     expanded = _expand_list_flags(kwargs)
-    return ext.run(op_name, inputs, output_dims, expanded)
+    return ext.run(op_name, inputs, output_dims, _pos or [], expanded)

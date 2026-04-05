@@ -1,45 +1,65 @@
 /*
  * bartorch_ext.cpp — PyTorch C++ extension entry point.
  *
- * This file is the sole compiled entry point for the ``_bartorch_ext``
- * Python extension module.  It exposes BART functionality through three
- * layers:
+ * Implements the generic ``run()`` dispatcher which:
  *
- *  1. ``run(op_name, inputs, output_dims, kwargs)``
- *     Generic hot-path dispatcher: registers input BartTensor data_ptr()
- *     buffers in BART's in-memory CFL registry (via
- *     register_mem_cfl_non_managed), allocates output BartTensors with
- *     Fortran strides, then calls bart_command() in-process.
+ *  1. Registers input tensor data_ptr()s in BART's in-memory CFL registry
+ *     via ``memcfl_register(…, managed=false)`` under ``_bt_inN.mem`` names.
+ *     Input tensors are C-order; their shape is reversed to BART Fortran order
+ *     at registration time (no data copy needed — identical byte layout).
  *
- *  2. Named op bindings (fft, phantom, pics, ecalib, …)
- *     Thin wrappers around run() that construct the argv array from typed
- *     Python arguments, mirroring the SWIG-based API from the old bartpy.
+ *  2. Calls ``bart_command()`` with a fully-formed argv.
  *
- *  3. BartTensor factory helpers (bart_empty, bart_zeros, bart_from_numpy)
- *     exposed to Python for use in scripts/notebooks.
+ *  3. Retrieves the output from the in-memory CFL registry
+ *     (``_bt_out0.mem``), copies it to a new contiguous C-order
+ *     ``complex64`` tensor, reverses the BART Fortran dims to bartorch
+ *     C-order, and returns it.
  *
- * Build requirements
- * ------------------
- *  - libtorch (from the user's PyTorch install, found via find_package(Torch))
- *  - BART static libraries compiled with -DMEMONLY_CFL
- *    (all I/O routed through the in-memory CFL registry)
- *  - optionally: CUDA toolkit when building with USE_CUDA=ON
+ *  4. Cleans up all ``*.mem`` registrations.
  *
- * See CMakeLists.txt for the full link list.
+ * The ``*.mem`` name suffix causes BART's ``io.c`` to route all
+ * ``create_cfl`` / ``load_cfl`` calls through the in-memory CFL registry
+ * instead of touching disk.
+ *
+ * No ``bart_embed_api.h`` — we call BART's own internal functions directly
+ * (``misc/memcfl.h``, ``misc/mmio.h``, ``misc/debug.h``).
  */
 
 #include <torch/extension.h>
 #include <pybind11/pybind11.h>
 #include <pybind11/stl.h>
 
-// BART embed API — declared in bart/src/bart_embed_api.h
-// The include path is set by CMakeLists.txt.
-extern "C" {
-#include "bart_embed_api.h"
-#include "misc/misc.h"
-}
+#include <algorithm>
+#include <atomic>
+#include <cstring>
+#include <regex>
+#include <sstream>
+#include <string>
+#include <vector>
 
-#include "tensor_bridge.hpp"
+// Forward-declare only the BART functions we need, using C++-safe signatures.
+// BART's own headers (misc/memcfl.h, misc/debug.h) use C99 VLAs and
+// 'complex float*' types which are not valid C++.
+// On all supported platforms void* and _Complex float* share the same size
+// and calling convention, so these redeclarations are ABI-compatible.
+extern "C" {
+    void  memcfl_register(const char* name, int D, const long* dims,
+                          void* data, int managed);
+    bool  memcfl_exists(const char* name);
+    void* memcfl_load(const char* name, int D, long* dims);
+    bool  memcfl_unmap(const void* p);
+    void  memcfl_unlink(const char* name);
+
+    extern int debug_level;
+    // Minimal debug-level constants matching BART's enum debug_levels.
+    enum { BARTORCH_DP_ERROR = 0, BARTORCH_DP_WARN = 1, BARTORCH_DP_INFO = 2 };
+
+    // bart_command is implemented in bart.c and linked via bart_static.
+    int bart_command(int len, char* out, int argc, char* argv[]);
+}
+// misc/types.h (pulled in transitively) defines `#define auto __auto_type`
+// which breaks C++.  Undo it immediately.
+#undef auto
 
 // Torch-prior registry functions — implemented in torch_prior.cpp.
 void bartorch_register_torch_prior(const std::string& name,
@@ -53,34 +73,304 @@ void bartorch_unregister_torch_prior(const std::string& name);
 
 namespace py = pybind11;
 
+static constexpr int BART_DIMS = 16;
+
+// ---------------------------------------------------------------------------
+// Argv construction helpers
+// ---------------------------------------------------------------------------
+
+/**
+ * Stringify a Python scalar / tuple value for a BART argv entry.
+ *
+ * Tuples are formatted as ``a:b:c`` (used by VEC2/VEC3 options).
+ */
+static std::string to_bart_str(py::object val)
+{
+    std::ostringstream oss;
+    if (py::isinstance<py::bool_>(val)) {
+        // Bare bool – caller should have skipped True-only flags already.
+        oss << (val.cast<bool>() ? "1" : "0");
+    } else if (py::isinstance<py::int_>(val)) {
+        oss << val.cast<long long>();
+    } else if (py::isinstance<py::float_>(val)) {
+        oss << val.cast<double>();
+    } else if (py::isinstance<py::str>(val)) {
+        oss << val.cast<std::string>();
+    } else if (py::isinstance<py::tuple>(val)) {
+        py::tuple t = val.cast<py::tuple>();
+        for (size_t i = 0; i < t.size(); ++i) {
+            if (i > 0) oss << ":";
+            py::object elem = py::reinterpret_borrow<py::object>(t[i]);
+            if (py::isinstance<py::int_>(elem))      oss << elem.cast<long long>();
+            else if (py::isinstance<py::float_>(elem)) oss << elem.cast<double>();
+            else oss << py::str(elem).cast<std::string>();
+        }
+    } else {
+        oss << py::str(val).cast<std::string>();
+    }
+    return oss.str();
+}
+
+/**
+ * Build the BART argv vector from all dispatch arguments.
+ *
+ * Layout: [op_name] [flags…] [positional_scalars…] [input_names…] [output_name]
+ *
+ * kwargs protocol
+ * ---------------
+ * - None / False  → skipped
+ * - Single-char key ``x``:
+ *     - True     → ``-x``  (bare flag)
+ *     - value    → ``-x value``
+ * - Key ``flag_N`` (synthetic numeric flag, e.g. ``flag_3`` → ``-3``):
+ *     - True     → ``-3``
+ *     - value    → ``-3 value``  (rare)
+ * - Key ending with ``_<digits>`` (list-expanded flag, e.g. ``R_0``):
+ *     strip suffix → apply single/long-flag rule on base key
+ * - Multi-char key ``long_name``:
+ *     replace ``_`` with ``-`` → ``--long-name``
+ *     - True     → ``--long-name``
+ *     - value    → ``--long-name value``
+ *
+ * positional_args
+ * ---------------
+ * Plain scalar values (e.g. bitmask for fft) inserted between flags and
+ * input file names.
+ */
+static std::vector<std::string> build_argv(
+    const std::string&              op_name,
+    const std::vector<std::string>& input_names,
+    const std::string&              output_name,
+    const py::list&                 positional_args,
+    const py::dict&                 kwargs)
+{
+    std::vector<std::string> parts;
+    // bart_command() passes argv to main_bart(), which calls basename(argv[0])
+    // and expects either "bart" (then reads the tool from argv[1]) or the tool
+    // name directly.  When argv[0] == "bart" the standard dispatch path is
+    // triggered, which calls parse_bart_opts() and initialises the order[]
+    // array before handing off to the tool.  Without this the array is
+    // uninitialised and loop_step() may segfault.
+    parts.push_back("bart");
+    parts.push_back(op_name);
+
+    // 1. Flags from kwargs -----------------------------------------------
+    for (auto item : kwargs) {
+        std::string key = item.first.cast<std::string>();
+        py::object  val = py::reinterpret_borrow<py::object>(item.second);
+
+        // Skip None and False
+        if (val.is_none()) continue;
+        if (py::isinstance<py::bool_>(val) && !val.cast<bool>()) continue;
+
+        // Detect list-expanded suffix: R_0, R_1, …  →  base = "R"
+        std::string base = key;
+        {
+            auto us = key.rfind('_');
+            if (us != std::string::npos && us + 1 < key.size()) {
+                std::string suffix = key.substr(us + 1);
+                bool all_digits = !suffix.empty();
+                for (char c : suffix) if (!isdigit((unsigned char)c)) { all_digits = false; break; }
+                if (all_digits) base = key.substr(0, us);
+            }
+        }
+
+        // Determine the flag string
+        std::string flag;
+        if (base.size() == 1) {
+            flag = "-" + base;
+        } else if (base.size() > 5 && base.substr(0, 5) == "flag_") {
+            // flag_3 → -3  (numeric flag characters)
+            flag = "-" + base.substr(5);
+        } else {
+            // Long flag: underscores → hyphens
+            std::string ln = base;
+            std::replace(ln.begin(), ln.end(), '_', '-');
+            flag = "--" + ln;
+        }
+        parts.push_back(flag);
+
+        // Add value if not a bare True flag
+        if (!(py::isinstance<py::bool_>(val) && val.cast<bool>())) {
+            parts.push_back(to_bart_str(val));
+        }
+    }
+
+    // 2. Positional scalar args ------------------------------------------
+    for (auto item : positional_args) {
+        py::object val = py::reinterpret_borrow<py::object>(item);
+        if (val.is_none()) continue;
+        parts.push_back(to_bart_str(val));
+    }
+
+    // 3. Input CFL names -------------------------------------------------
+    for (const auto& n : input_names) parts.push_back(n);
+
+    // 4. Output CFL name -------------------------------------------------
+    parts.push_back(output_name);
+
+    return parts;
+}
+
 // ---------------------------------------------------------------------------
 // Generic hot-path dispatcher
 // ---------------------------------------------------------------------------
 
 /**
- * run() — zero-copy in-process BART command execution.
+ * run() — in-process BART command execution with zero-copy input registration.
  *
- * For every tensor input:
- *   - asserts dtype == complex64 and Fortran-order strides
- *   - registers data_ptr() under a unique *.mem name via
- *     register_mem_cfl_non_managed()
+ * Parameters
+ * ----------
+ * op_name         BART tool name (e.g. "fft", "phantom")
+ * py_inputs       list of complex64 torch.Tensor (C-order, one per input CFL)
+ * output_dims_py  expected output shape hint (currently unused; BART infers it)
+ * positional_args plain scalar positional argv entries (e.g. bitmask for fft)
+ * kwargs          flag options: single-char → -f, multi-char → --long-flag
  *
- * Allocates output tensors (Fortran strides, complex64) using output_dims
- * (or dims inferred from a dry-run when output_dims is None), registers them,
- * then calls bart_command().
+ * Returns
+ * -------
+ * torch.Tensor  C-order complex64 result tensor
  *
- * On return, unlinks all *.mem names and returns the output BartTensor(s).
+ * Raises
+ * ------
+ * RuntimeError  if bart_command() returns non-zero
  */
 static py::object run(
     const std::string& op_name,
-    py::list inputs,
-    py::object output_dims_py,
-    py::dict kwargs)
+    py::list           py_inputs,
+    py::object         output_dims_py,
+    py::list           positional_args,
+    py::dict           kwargs)
 {
-    // TODO: implement once CMake/BART build is wired up.
-    throw std::runtime_error(
-        "_bartorch_ext.run() is not yet implemented — "
-        "please build the C++ extension first.");
+    // Suppress BART's informational output during normal calls.
+    // BARTORCH_DP_WARN (1) lets only errors and warnings through.
+    int saved_debug = debug_level;
+    if (debug_level < 0 || debug_level > BARTORCH_DP_WARN)
+        debug_level = BARTORCH_DP_WARN;
+
+    // ── 1. Register input tensors ──────────────────────────────────────────
+    // Use a per-call counter in names so stale entries from a previous error
+    // do not collide with the current call.
+    static std::atomic<uint64_t> s_call_id{0};
+    uint64_t call_id = s_call_id.fetch_add(1, std::memory_order_relaxed);
+
+    std::vector<std::string>   input_names;
+    std::vector<torch::Tensor> inputs;   // keep alive until after bart_command
+
+    for (size_t i = 0; i < (size_t)py_inputs.size(); ++i) {
+        torch::Tensor t = py_inputs[i].cast<torch::Tensor>();
+        // Ensure complex64 and C-contiguous (no-op when already correct).
+        t = t.to(torch::kComplexFloat).contiguous();
+        inputs.push_back(t);
+
+        std::string name = "_bt_" + std::to_string(call_id) +
+                           "_in" + std::to_string(i) + ".mem";
+        input_names.push_back(name);
+
+        // A C-order contiguous tensor with Python shape [d_{N-1},…,d_0] has
+        // IDENTICAL byte layout to a Fortran-order array with BART dims
+        // [d_0,…,d_{N-1}].  So we reverse the shape for registration.
+        auto shape = t.sizes().vec();
+        int  ndim  = (int)shape.size();
+
+        long bart_dims[BART_DIMS];
+        for (int j = 0; j < BART_DIMS; ++j) bart_dims[j] = 1;
+        for (int j = 0; j < ndim; ++j)
+            bart_dims[j] = shape[ndim - 1 - j];  // reverse
+
+        // managed=false → BART never frees our tensor's data pointer.
+        memcfl_register(name.c_str(), BART_DIMS, bart_dims,
+                        t.data_ptr(), /*managed=*/0);
+    }
+
+    const std::string output_name =
+        "_bt_" + std::to_string(call_id) + "_out0.mem";
+
+    // ── 2. Build argv and call BART ────────────────────────────────────────
+    auto parts = build_argv(op_name, input_names, output_name,
+                            positional_args, kwargs);
+
+    std::vector<char*> argv;
+    argv.reserve(parts.size() + 1);
+    for (auto& s : parts) argv.push_back(const_cast<char*>(s.c_str()));
+    argv.push_back(nullptr);
+    int argc = (int)parts.size();
+
+    char err_buf[512] = {'\0'};
+    int  ret          = bart_command(sizeof(err_buf), err_buf, argc, argv.data());
+
+    debug_level = saved_debug;
+
+    // ── 3. Clean up input registrations ───────────────────────────────────
+    // After a successful bart_command() call:
+    //   - Each input was loaded by the tool (refcount: 1 → 2) then unmapped
+    //     (refcount: 2 → 1) by the BART tool code.
+    //   - We call memcfl_unmap once (refcount: 1 → 0) before memcfl_unlink.
+    //
+    // After a failed bart_command() call:
+    //   - The refcount may be 1 (tool never loaded the CFL) or 2 (loaded but
+    //     longjmp was called before unmap_cfl).
+    //   - We skip cleanup on error to avoid a cascade error from memcfl_unlink.
+    //     The unique call_id in names ensures stale entries never collide.
+    if (ret == 0) {
+        for (size_t i = 0; i < inputs.size(); ++i) {
+            memcfl_unmap(inputs[i].data_ptr());
+            memcfl_unlink(input_names[i].c_str());
+        }
+    }
+    // Note: on ret != 0, input entries are intentionally left in the registry
+    // with their call-id-scoped names and will not interfere with future calls.
+
+    // ── 4. Handle BART error ───────────────────────────────────────────────
+    if (ret != 0) {
+        if (memcfl_exists(output_name.c_str()))
+            memcfl_unlink(output_name.c_str());
+        std::string msg = "BART '" + op_name + "' failed (code " +
+                          std::to_string(ret) + ")";
+        if (err_buf[0]) msg += ": " + std::string(err_buf);
+        throw std::runtime_error(msg);
+    }
+
+    // ── 5. Retrieve scalar text output (nrmse, bitmask, …) ────────────────
+    // These commands write a number/string to err_buf and do NOT create an
+    // output CFL file.
+    if (!memcfl_exists(output_name.c_str())) {
+        if (err_buf[0]) return py::str(std::string(err_buf));
+        return py::none();
+    }
+
+    // ── 6. Retrieve CFL output ────────────────────────────────────────────
+    long bart_dims_out[BART_DIMS] = {0};
+    // memcfl_load increments refcount (0 → 1 after tool's unmap_cfl already
+    // brought it to 0).
+    // memcfl_load returns complex float* in C; we capture it as void* to avoid
+    // C99 complex-type usage in C++ code outside an extern "C" block.
+    void* ptr = memcfl_load(output_name.c_str(), BART_DIMS, bart_dims_out);
+    TORCH_CHECK(ptr != nullptr,
+                "bartorch: memcfl_load returned NULL for output '", output_name, "'");
+
+    // Find effective ndim: trim trailing size-1 dims (minimum 1).
+    int ndim_out = BART_DIMS;
+    while (ndim_out > 1 && bart_dims_out[ndim_out - 1] == 1) --ndim_out;
+
+    // Reverse BART Fortran dims → bartorch C-order shape.
+    std::vector<int64_t> shape_out(ndim_out);
+    for (int j = 0; j < ndim_out; ++j)
+        shape_out[j] = bart_dims_out[ndim_out - 1 - j];
+
+    // Allocate C-order contiguous output tensor and copy.
+    // (A C-order tensor with reversed shape has the same byte layout as BART's
+    //  Fortran-order buffer — so memcpy is a straight block copy, no reordering.)
+    auto result = torch::empty(shape_out,
+                               torch::TensorOptions().dtype(torch::kComplexFloat));
+    std::memcpy(result.data_ptr(), ptr,
+                (size_t)result.numel() * sizeof(c10::complex<float>));
+
+    // Release BART's ownership of the output CFL.
+    memcfl_unmap(ptr);               // refcount 1 → 0
+    memcfl_unlink(output_name.c_str()); // free (managed=true, malloc'd by BART)
+
+    return py::cast(result);
 }
 
 // ---------------------------------------------------------------------------
@@ -94,8 +384,11 @@ PYBIND11_MODULE(_bartorch_ext, m) {
           py::arg("op_name"),
           py::arg("inputs"),
           py::arg("output_dims"),
+          py::arg("positional_args"),
           py::arg("kwargs"),
-          "Generic zero-copy BART command dispatcher (hot path).");
+          "Generic in-process BART command dispatcher.\n\n"
+          "Registers input tensors in BART's in-memory CFL registry, calls\n"
+          "bart_command(), retrieves and returns the output tensor.");
 
     m.def("register_torch_prior",
           &bartorch_register_torch_prior,
@@ -110,9 +403,4 @@ PYBIND11_MODULE(_bartorch_ext, m) {
           &bartorch_unregister_torch_prior,
           py::arg("name"),
           "Remove a previously registered torch prior from the registry.");
-
-    // Named op bindings will be added here as the implementation matures.
-    // Example (not yet active):
-    //   m.def("fft",  &bart_fft,  ...);
-    //   m.def("pics", &bart_pics, ...);
 }

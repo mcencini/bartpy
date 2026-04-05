@@ -325,7 +325,7 @@ def avg(
         Result array in C-order ``complex64``.
     """
     return dispatch('avg', [input_], output_dims,
-                    w=w or None, bitmask=bitmask, **extra_flags)
+                    _pos=[bitmask], w=w or None, **extra_flags)
 
 @bart_op
 def bin(
@@ -548,7 +548,7 @@ def calc(
         Result array in C-order ``complex64``.
     """
     return dispatch('calc', [input_], output_dims,
-                    func=func, **extra_flags)
+                    _pos=[func], **extra_flags)
 
 @bart_op
 def caldir(
@@ -585,7 +585,7 @@ def caldir(
         Result array in C-order ``complex64``.
     """
     return dispatch('caldir', [input_], output_dims,
-                    cal_size=cal_size, **extra_flags)
+                    _pos=[cal_size], **extra_flags)
 
 @bart_op
 def calmat(
@@ -846,7 +846,7 @@ def cdf97(
         Result array in C-order ``complex64``.
     """
     return dispatch('cdf97', [input_], output_dims,
-                    i=i or None, bitmask=bitmask, **extra_flags)
+                    _pos=[bitmask], i=i or None, **extra_flags)
 
 @bart_op
 def circshift(
@@ -886,7 +886,7 @@ def circshift(
         Result array in C-order ``complex64``.
     """
     return dispatch('circshift', [input_], output_dims,
-                    dim=dim, shift=shift, **extra_flags)
+                    _pos=[dim, shift], **extra_flags)
 
 @bart_op
 def coils(
@@ -1049,7 +1049,7 @@ def conv(
         Result array in C-order ``complex64``.
     """
     return dispatch('conv', [input_, kernel], output_dims,
-                    bitmask=bitmask, **extra_flags)
+                    _pos=[bitmask], **extra_flags)
 
 @bart_op
 def conway(
@@ -1236,7 +1236,7 @@ def crop(
         Result array in C-order ``complex64``.
     """
     return dispatch('crop', [input_], output_dims,
-                    dimension=dimension, size=size, **extra_flags)
+                    _pos=[dimension, size], **extra_flags)
 
 @bart_op
 def cunet(
@@ -1326,7 +1326,7 @@ def delta(
         Result array in C-order ``complex64``.
     """
     return dispatch('delta', [], output_dims,
-                    dims=dims, flags=flags, size=size, **extra_flags)
+                    _pos=[dims, flags, size], **extra_flags)
 
 @bart_op
 def denoise(
@@ -1630,7 +1630,7 @@ def ecaltwo(
         Result array in C-order ``complex64``.
     """
     return dispatch('ecaltwo', [input_], output_dims,
-                    S=S or None, O=O or None, g=g or None, c=c, m=m, x=x, y=y, z=z, **extra_flags)
+                    _pos=[x, y, z], S=S or None, O=O or None, g=g or None, c=c, m=m, **extra_flags)
 
 @bart_op
 def epg(
@@ -1844,7 +1844,7 @@ def estmotion(
         Result array in C-order ``complex64``.
     """
     return dispatch('estmotion', [reference, moved], output_dims,
-                    g=g or None, l=l, r=r, optical_flow=optical_flow or None, max_flow=max_flow, flags=flags, **extra_flags)
+                    _pos=[flags], g=g or None, l=l, r=r, optical_flow=optical_flow or None, max_flow=max_flow, **extra_flags)
 
 @bart_op
 def estscaling(
@@ -1931,7 +1931,7 @@ def estshift(
         Result array in C-order ``complex64``.
     """
     return dispatch('estshift', [arg1, arg2], output_dims,
-                    f=f or None, flags=flags, **extra_flags)
+                    _pos=[flags], f=f or None, **extra_flags)
 
 @bart_op
 def estvar(
@@ -2102,7 +2102,7 @@ def fft(
         Result array in C-order ``complex64``.
     """
     return dispatch('fft', [input_], output_dims,
-                    u=u or None, i=i or None, n=n or None, bitmask=bitmask, **extra_flags)
+                    _pos=[bitmask], u=u or None, i=i or None, n=n or None, **extra_flags)
 
 @bart_op
 def fftmod(
@@ -2145,7 +2145,7 @@ def fftmod(
         Result array in C-order ``complex64``.
     """
     return dispatch('fftmod', [input_], output_dims,
-                    b=b or None, i=i or None, bitmask=bitmask, **extra_flags)
+                    _pos=[bitmask], b=b or None, i=i or None, **extra_flags)
 
 @bart_op
 def fftrot(
@@ -2188,7 +2188,7 @@ def fftrot(
         Result array in C-order ``complex64``.
     """
     return dispatch('fftrot', [input_], output_dims,
-                    dim1=dim1, dim2=dim2, theta=theta, **extra_flags)
+                    _pos=[dim1, dim2, theta], **extra_flags)
 
 @bart_op
 def fftshift(
@@ -2228,7 +2228,7 @@ def fftshift(
         Result array in C-order ``complex64``.
     """
     return dispatch('fftshift', [input_], output_dims,
-                    b=b or None, bitmask=bitmask, **extra_flags)
+                    _pos=[bitmask], b=b or None, **extra_flags)
 
 @bart_op
 def filter(
@@ -2363,7 +2363,7 @@ def flip(
         Result array in C-order ``complex64``.
     """
     return dispatch('flip', [input_], output_dims,
-                    bitmask=bitmask, **extra_flags)
+                    _pos=[bitmask], **extra_flags)
 
 @bart_op
 def fmac(
@@ -2644,7 +2644,7 @@ def hist(
         Result array in C-order ``complex64``.
     """
     return dispatch('hist', [input_], output_dims,
-                    c=c or None, s=s, bitmask=bitmask, **extra_flags)
+                    _pos=[bitmask], c=c or None, s=s, **extra_flags)
 
 @bart_op
 def homodyne(
@@ -2701,7 +2701,7 @@ def homodyne(
         Result array in C-order ``complex64``.
     """
     return dispatch('homodyne', [input_], output_dims,
-                    I=I or None, C=C or None, n=n or None, r=r, P=P, dim=dim, fraction=fraction, **extra_flags)
+                    _pos=[dim, fraction], I=I or None, C=C or None, n=n or None, r=r, P=P, **extra_flags)
 
 @bart_op
 def ictv(
@@ -2751,7 +2751,7 @@ def ictv(
         Result array in C-order ``complex64``.
     """
     return dispatch('ictv', [input_], output_dims,
-                    i=i, u=u, gamma=gamma, lambda_=lambda_, flags=flags, **extra_flags)
+                    _pos=[lambda_, flags], i=i, u=u, gamma=gamma, **extra_flags)
 
 @bart_op
 def index(
@@ -2802,7 +2802,7 @@ def index(
         Result array in C-order ``complex64``.
     """
     return dispatch('index', [], output_dims,
-                    end=end or None, log=log or None, min_=min_, max_=max_, dim=dim, size=size, **extra_flags)
+                    _pos=[dim, size], end=end or None, log=log or None, min_=min_, max_=max_, **extra_flags)
 
 @bart_op
 def interpolate(
@@ -2853,7 +2853,7 @@ def interpolate(
         Result array in C-order ``complex64``.
     """
     return dispatch('interpolate', [input_, coordinates__default___per__displacement_field__per__affine_transform], output_dims,
-                    N=N or None, C=C or None, x=x, flags=flags, **extra_flags)
+                    _pos=[flags], N=N or None, C=C or None, x=x, **extra_flags)
 
 @bart_op
 def invert(
@@ -2978,7 +2978,7 @@ def itsense(
         Result array in C-order ``complex64``.
     """
     return dispatch('itsense', [sensitivities, kspace, pattern], output_dims,
-                    alpha=alpha, **extra_flags)
+                    _pos=[alpha], **extra_flags)
 
 @bart_op
 def join(
@@ -3022,7 +3022,7 @@ def join(
         Result array in C-order ``complex64``.
     """
     return dispatch('join', [output], output_dims,
-                    a=a or None, s=s or None, dimension=dimension, **extra_flags)
+                    _pos=[dimension], a=a or None, s=s or None, **extra_flags)
 
 @bart_op
 def looklocker(
@@ -3278,7 +3278,7 @@ def mip(
         Result array in C-order ``complex64``.
     """
     return dispatch('mip', [input_], output_dims,
-                    m=m or None, a=a or None, bitmask=bitmask, **extra_flags)
+                    _pos=[bitmask], m=m or None, a=a or None, **extra_flags)
 
 @bart_op
 def mnist(
@@ -3676,7 +3676,7 @@ def morphop(
         Result array in C-order ``complex64``.
     """
     return dispatch('morphop', [binary_input], output_dims,
-                    mask_size=mask_size, **extra_flags)
+                    _pos=[mask_size], **extra_flags)
 
 @bart_op
 def multicfl(
@@ -4206,7 +4206,7 @@ def nlmeans(
         Result array in C-order ``complex64``.
     """
     return dispatch('nlmeans', [input_], output_dims,
-                    H=H, a=a, p=p, d=d, flags=flags, **extra_flags)
+                    _pos=[flags], H=H, a=a, p=p, d=d, **extra_flags)
 
 @bart_op
 def nnet(
@@ -4363,7 +4363,7 @@ def normalize(
         Result array in C-order ``complex64``.
     """
     return dispatch('normalize', [input_], output_dims,
-                    b=b or None, flags=flags, **extra_flags)
+                    _pos=[flags], b=b or None, **extra_flags)
 
 @bart_op
 def nrmse(
@@ -4560,7 +4560,7 @@ def nufftbase(
         Result array in C-order ``complex64``.
     """
     return dispatch('nufftbase', [trajectory], output_dims,
-                    dimensions=dimensions, **extra_flags)
+                    _pos=[dimensions], **extra_flags)
 
 @bart_op
 def onehotenc(
@@ -4635,7 +4635,7 @@ def ones(
         Result array in C-order ``complex64``.
     """
     return dispatch('ones', [], output_dims,
-                    dims=dims, **extra_flags)
+                    _pos=[dims], **extra_flags)
 
 @bart_op
 def pattern(
@@ -5243,7 +5243,7 @@ def poly(
         Result array in C-order ``complex64``.
     """
     return dispatch('poly', [], output_dims,
-                    L=L, N=N, **extra_flags)
+                    _pos=[L, N], **extra_flags)
 
 @bart_op
 def psf(
@@ -5402,7 +5402,7 @@ def raga(
         Result array in C-order ``complex64``.
     """
     return dispatch('raga', [], output_dims,
-                    no_double_base=no_double_base or None, s=s, r=r, e=e, m=m, z=z, i=i, c=c, spokes=spokes, **extra_flags)
+                    _pos=[spokes], no_double_base=no_double_base or None, s=s, r=r, e=e, m=m, z=z, i=i, c=c, **extra_flags)
 
 @bart_op
 def reconet(
@@ -5563,7 +5563,7 @@ def repmat(
         Result array in C-order ``complex64``.
     """
     return dispatch('repmat', [input_], output_dims,
-                    dimension=dimension, repetitions=repetitions, **extra_flags)
+                    _pos=[dimension, repetitions], **extra_flags)
 
 @bart_op
 def reshape(
@@ -5603,7 +5603,7 @@ def reshape(
         Result array in C-order ``complex64``.
     """
     return dispatch('reshape', [input_], output_dims,
-                    s=s, flags=flags, **extra_flags)
+                    _pos=[flags], s=s, **extra_flags)
 
 @bart_op
 def resize(
@@ -5721,7 +5721,7 @@ def rof(
         Result array in C-order ``complex64``.
     """
     return dispatch('rof', [input_], output_dims,
-                    lambda_=lambda_, flags=flags, **extra_flags)
+                    _pos=[lambda_, flags], **extra_flags)
 
 @bart_op
 def roistat(
@@ -5836,7 +5836,7 @@ def rss(
         Result array in C-order ``complex64``.
     """
     return dispatch('rss', [input_], output_dims,
-                    bitmask=bitmask, **extra_flags)
+                    _pos=[bitmask], **extra_flags)
 
 @bart_op
 def rtnlinv(
@@ -6833,7 +6833,7 @@ def std(
         Result array in C-order ``complex64``.
     """
     return dispatch('std', [input_], output_dims,
-                    bitmask=bitmask, **extra_flags)
+                    _pos=[bitmask], **extra_flags)
 
 @bart_op
 def stl(
@@ -6997,7 +6997,7 @@ def tensorflow(
         Result array in C-order ``complex64``.
     """
     return dispatch('tensorflow', [], output_dims,
-                    n=n or None, g=g or None, b=b, TensorFlow_Graph=TensorFlow_Graph, **extra_flags)
+                    _pos=[TensorFlow_Graph], n=n or None, g=g or None, b=b, **extra_flags)
 
 @bart_op
 def tgv(
@@ -7041,7 +7041,7 @@ def tgv(
         Result array in C-order ``complex64``.
     """
     return dispatch('tgv', [input_], output_dims,
-                    alpha=alpha, lambda_=lambda_, flags=flags, **extra_flags)
+                    _pos=[lambda_, flags], alpha=alpha, **extra_flags)
 
 @bart_op
 def threshold(
@@ -7085,7 +7085,7 @@ def threshold(
         Result array in C-order ``complex64``.
     """
     return dispatch('threshold', [input_], output_dims,
-                    j=j, b=b, lambda_=lambda_, **extra_flags)
+                    _pos=[lambda_], j=j, b=b, **extra_flags)
 
 @bart_op
 def toimg(
@@ -7400,7 +7400,7 @@ def transpose(
         Result array in C-order ``complex64``.
     """
     return dispatch('transpose', [input_], output_dims,
-                    dim1=dim1, dim2=dim2, **extra_flags)
+                    _pos=[dim1, dim2], **extra_flags)
 
 @bart_op
 def twixread(
@@ -7474,7 +7474,7 @@ def unwrap(
         Result array in C-order ``complex64``.
     """
     return dispatch('unwrap', [input_], output_dims,
-                    b=b, dim=dim, **extra_flags)
+                    _pos=[dim], b=b, **extra_flags)
 
 @bart_op
 def upat(
@@ -7557,7 +7557,7 @@ def var(
         Result array in C-order ``complex64``.
     """
     return dispatch('var', [input_], output_dims,
-                    bitmask=bitmask, **extra_flags)
+                    _pos=[bitmask], **extra_flags)
 
 @bart_op
 def vec(
@@ -7764,7 +7764,7 @@ def wavelet(
         Result array in C-order ``complex64``.
     """
     return dispatch('wavelet', [input_], output_dims,
-                    a=a or None, bitmask=bitmask, **extra_flags)
+                    _pos=[bitmask], a=a or None, **extra_flags)
 
 @bart_op
 def wavepsf(
@@ -7917,7 +7917,7 @@ def window(
         Result array in C-order ``complex64``.
     """
     return dispatch('window', [input_], output_dims,
-                    H=H or None, flags=flags, **extra_flags)
+                    _pos=[flags], H=H or None, **extra_flags)
 
 @bart_op
 def wshfl(
@@ -8042,7 +8042,7 @@ def zeros(
         Result array in C-order ``complex64``.
     """
     return dispatch('zeros', [], output_dims,
-                    dims=dims, **extra_flags)
+                    _pos=[dims], **extra_flags)
 
 @bart_op
 def zexp(

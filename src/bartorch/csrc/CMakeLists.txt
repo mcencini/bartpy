@@ -61,6 +61,7 @@ set(BART_SRC_DIR "${CMAKE_SOURCE_DIR}/../../../bart/src")
 set(BART_DEFS
     BART_WITH_PYTHON         # suppress abort() → RuntimeError
     NO_MCU                   # skip microcontroller code
+    NO_PNG                   # disable libpng dependency in misc/png.c
     # NOTE: MEMONLY_CFL is intentionally NOT set here.
     # At this BART commit, defining MEMONLY_CFL hides the declarations of
     # shared_cfl / private_cfl in mmio.h while mmio.c still references them
@@ -398,58 +399,42 @@ endif()
 
 # ---------------------------------------------------------------------------
 # BART static library target
-# The minimal set of BART source files needed for the initial op set.
-# This list will grow as more ops are wrapped.
+#
+# Source selection mirrors BART's own Makefile, which uses:
+#   $(wildcard $(srcdir)/$(module)/*.c)
+# i.e. ALL .c files in each required module directory.
+#
+# Doing the same here with file(GLOB) avoids the class of bugs caused by
+# hand-picking files and missing transitive dependencies (e.g. num/optimize.c
+# defines `num_chunk_size`, a data symbol referenced by num/init.c; missing it
+# causes an undefined-symbol ImportError at Python load time).
+#
+# Optional-feature files are made safe by compile definitions:
+#   NO_PNG     — misc/png.c: skips libpng I/O behind #ifndef NO_PNG
+#   USE_MKL    — num/lapack.c: selects <mkl.h> LAPACK header (set by MKL block above)
+#   (no USE_CUDA)  — num/gpuops.c, fft-cuda.c, etc. are entirely inside
+#                     #ifdef USE_CUDA so they compile cleanly as no-ops.
+#   (no USE_MPI)   — num/mpi_ops.c guards all symbols with #ifdef USE_MPI.
 # ---------------------------------------------------------------------------
-# Note: a full build would use BART's own Makefile; for the extension we
-# compile only the files we need to keep the wheel small and build fast.
-# The authoritative list is maintained in agents.md §§ Build System.
+file(GLOB _bart_misc_srcs   "${BART_SRC_DIR}/misc/*.c")
+file(GLOB _bart_num_srcs    "${BART_SRC_DIR}/num/*.c")
+file(GLOB _bart_simu_srcs   "${BART_SRC_DIR}/simu/*.c")
+file(GLOB _bart_linops_srcs "${BART_SRC_DIR}/linops/*.c")
+file(GLOB _bart_wavelet_srcs "${BART_SRC_DIR}/wavelet/*.c")
+file(GLOB _bart_iter_srcs   "${BART_SRC_DIR}/iter/*.c")
+file(GLOB _bart_nlops_srcs  "${BART_SRC_DIR}/nlops/*.c")
+file(GLOB _bart_noncart_srcs "${BART_SRC_DIR}/noncart/*.c")
+
 set(BART_SOURCES
-    # misc
-    ${BART_SRC_DIR}/misc/misc.c
-    ${BART_SRC_DIR}/misc/debug.c
-    ${BART_SRC_DIR}/misc/io.c
-    ${BART_SRC_DIR}/misc/mmio.c
-    ${BART_SRC_DIR}/misc/memcfl.c
-    ${BART_SRC_DIR}/misc/stream.c
-    ${BART_SRC_DIR}/misc/stream_protocol.c
-    ${BART_SRC_DIR}/misc/lock.c
-    ${BART_SRC_DIR}/misc/shrdptr.c
-    ${BART_SRC_DIR}/misc/list.c
-    ${BART_SRC_DIR}/misc/opts.c
-    ${BART_SRC_DIR}/misc/utils.c
-    ${BART_SRC_DIR}/misc/version.c
-    # num
-    ${BART_SRC_DIR}/num/multind.c
-    ${BART_SRC_DIR}/num/flpmath.c
-    ${BART_SRC_DIR}/num/fft.c
-    ${BART_SRC_DIR}/num/fft_plan.c
-    ${BART_SRC_DIR}/num/blas.c
-    ${BART_SRC_DIR}/num/vecops.c
-    ${BART_SRC_DIR}/num/rand.c
-    ${BART_SRC_DIR}/num/init.c
-    ${BART_SRC_DIR}/num/vptr.c
-    ${BART_SRC_DIR}/num/delayed.c
-    ${BART_SRC_DIR}/num/mpi_ops.c
-    # num — additional modules needed by noncart/grid.c and noncart/nufft.c
-    ${BART_SRC_DIR}/num/specfun.c
-    ${BART_SRC_DIR}/num/multiplace.c
-    ${BART_SRC_DIR}/num/vptr_fun.c
-    # simu
-    ${BART_SRC_DIR}/simu/phantom.c
-    ${BART_SRC_DIR}/simu/shape.c
-    # linops
-    ${BART_SRC_DIR}/linops/linop.c
-    ${BART_SRC_DIR}/linops/someops.c
-    ${BART_SRC_DIR}/linops/fmac.c
-    # iter
-    ${BART_SRC_DIR}/iter/iter.c
-    ${BART_SRC_DIR}/iter/iter2.c
-    ${BART_SRC_DIR}/iter/prox.c
-    ${BART_SRC_DIR}/iter/thresh.c
-    # noncart — KB gridding helpers (grid2/grid2H replaced by finufft_grid.cpp via --wrap)
-    ${BART_SRC_DIR}/noncart/grid.c
-    # embed API + main dispatcher
+    ${_bart_misc_srcs}
+    ${_bart_num_srcs}
+    ${_bart_simu_srcs}
+    ${_bart_linops_srcs}
+    ${_bart_wavelet_srcs}
+    ${_bart_iter_srcs}
+    ${_bart_nlops_srcs}
+    ${_bart_noncart_srcs}
+    # embed API + main dispatcher (top-level, not in a module directory)
     ${BART_SRC_DIR}/main.c
     ${BART_SRC_DIR}/bart.c
 )

@@ -38,7 +38,6 @@ from __future__ import annotations
 
 import argparse
 import keyword
-import os
 import re
 import sys
 import textwrap
@@ -402,7 +401,7 @@ def _generate_func(info: dict) -> str:
         doc_lines.append(f"    Wraps BART's ``{name}`` command.")
     doc_lines.append("")
     doc_lines.append(f"    Equivalent to calling ``bart {name}`` with the given arguments.")
-    doc_lines.append(f"    See the BART documentation for full details.")
+    doc_lines.append("    See the BART documentation for full details.")
     doc_lines.append("")
     doc_lines.append(_cuda_note(name, opts))
     doc_lines.append("    Parameters")
@@ -436,7 +435,7 @@ def _generate_func(info: dict) -> str:
 
     doc_lines.append("    **extra_flags : Any")
     doc_lines.append(f"        Additional BART ``{name}`` flags forwarded directly.")
-    doc_lines.append("    ")
+    doc_lines.append("")
     doc_lines.append("    Returns")
     doc_lines.append("    -------")
     doc_lines.append("    torch.Tensor")

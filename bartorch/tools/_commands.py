@@ -7,12 +7,24 @@ The overrides are purely Pythonic argument-translation layers — each one calls
 its auto-generated counterpart in :mod:`bartorch.tools._generated` after
 mapping human-readable keyword names to the raw BART flag letters.
 
-* :func:`ecalib` — maps Pythonic keyword names (``calib_size``, ``maps``, …)
-  to raw BART flags, then calls :func:`_generated.ecalib`
-* :func:`caldir` — maps ``calib_size`` to the BART ``-r`` flag, then calls
-  :func:`_generated.caldir`
-* :func:`pics`   — ``R`` accepts ``list[str]`` for multiple regularisers;
-  translates Pythonic kwargs to BART flags and calls :func:`_generated.pics`
+The following commands are overridden:
+
+* :func:`fft` / :func:`ifft` — accept ``axes=`` (C-order indices) instead of
+  a raw BART bitmask; ``inverse`` and ``unitary`` flags use full words.
+* :func:`ecalib` — maps ``calib_size``, ``maps``, ``threshold``, … to flags,
+  then calls :func:`_generated.ecalib`.
+* :func:`caldir` — maps ``calib_size`` → positional ``cal_size`` argument,
+  then calls :func:`_generated.caldir`.
+* :func:`pics` — ``R`` accepts ``list[str]`` for stacked regularisers; all
+  solver parameters use full Python names; delegates to
+  :func:`_generated.pics`.
+* :func:`nlinv` — maps ``iter_`` → ``-i`` and ``nmaps`` → ``-m`` to avoid
+  cryptic single-letter kwargs; delegates to :func:`_generated.nlinv`.
+* :func:`moba` — maps ``model``, ``iter_``, ``inner_iter``, ``gpu`` to BART
+  flags; delegates to :func:`_generated.moba`.
+* :func:`nufft` — maps ``adjoint``, ``inverse``, ``image_dims``, ``l2_reg``,
+  ``max_iter``, ``gpu``, ``toeplitz`` to BART flags; delegates to
+  :func:`_generated.nufft`.
 
 All other commands are re-exported unchanged.
 The ``__init__.py`` imports from this module to build the public API.
@@ -32,8 +44,120 @@ from bartorch.tools import _generated
 # follow shadow the generated versions of the same name.
 from bartorch.tools._generated import *  # noqa: F401,F403
 from bartorch.tools._generated import __all__ as _generated_all
+from bartorch.utils.flags import axes_to_flags
 
-__all__ = list(_generated_all)
+__all__ = [*_generated_all, "ifft"]
+
+
+# ---------------------------------------------------------------------------
+# FFT — axes= ergonomics (C-order axis indices → BART bitmask)
+# ---------------------------------------------------------------------------
+
+
+def fft(
+    input_: torch.Tensor,
+    axes: int | tuple[int, ...] | list[int],
+    *,
+    unitary: bool = False,
+    inverse: bool = False,
+    **extra_flags: Any,
+) -> torch.Tensor:
+    """Multidimensional FFT over C-order axis indices.
+
+    Converts Python C-order axis indices (including negative indices) to the
+    BART Fortran-order bitmask required by ``bart fft``, then delegates to
+    :func:`_generated.fft`.
+
+    .. note::
+        **CUDA:** CPU only.  CUDA tensors are automatically moved to CPU before
+        dispatch and returned to the original device.
+
+    Parameters
+    ----------
+    input_ : torch.Tensor
+        Input array (any dtype; cast to ``complex64`` automatically).
+    axes : int or sequence of int
+        C-order axis index or indices to transform.  Negative values are
+        supported.  Examples:
+
+        * ``axes=-1``        — transform the last (read) axis only
+        * ``axes=(-1, -2)``  — transform the last two axes (typical 2-D FFT)
+        * ``axes=(0, 1, 2)`` — transform the first three axes
+    unitary : bool, optional
+        Apply unitary (1/√N) normalisation (``-u``).  Default ``False``.
+    inverse : bool, optional
+        Compute inverse FFT (``-i``).  Default ``False`` (forward FFT).
+    **extra_flags :
+        Additional BART ``fft`` flags forwarded directly.
+
+    Returns
+    -------
+    torch.Tensor
+        Complex64 tensor with the same shape as *input_*.
+
+    See Also
+    --------
+    ifft : Convenience alias for inverse FFT.
+
+    Examples
+    --------
+    >>> import bartorch.tools as bt
+    >>> ph = bt.phantom([256, 256])
+    >>> kspace = bt.fft(ph, axes=(-1, -2))   # 2-D FFT over last two axes
+    """
+    bitmask = axes_to_flags(axes, ndim=input_.ndim)
+    return _generated.fft(
+        input_,
+        bitmask,
+        u=unitary or None,
+        i=inverse or None,
+        **extra_flags,
+    )
+
+
+def ifft(
+    input_: torch.Tensor,
+    axes: int | tuple[int, ...] | list[int],
+    *,
+    unitary: bool = False,
+    **extra_flags: Any,
+) -> torch.Tensor:
+    """Inverse multidimensional FFT.
+
+    Convenience alias for :func:`fft` with ``inverse=True``.
+
+    .. note::
+        **CUDA:** CPU only.  CUDA tensors are automatically moved to CPU before
+        dispatch and returned to the original device.
+
+    Parameters
+    ----------
+    input_ : torch.Tensor
+        Input array (any dtype; cast to ``complex64`` automatically).
+    axes : int or sequence of int
+        C-order axis index or indices to transform.  Negative values are
+        supported.
+    unitary : bool, optional
+        Apply unitary (1/√N) normalisation (``-u``).  Default ``False``.
+    **extra_flags :
+        Additional BART ``fft`` flags forwarded directly.
+
+    Returns
+    -------
+    torch.Tensor
+        Complex64 tensor with the same shape as *input_*.
+
+    See Also
+    --------
+    fft : Forward FFT.
+
+    Examples
+    --------
+    >>> import bartorch.tools as bt
+    >>> kspace = bt.fft(bt.phantom([256, 256]), axes=(-1, -2))
+    >>> image  = bt.ifft(kspace, axes=(-1, -2))
+    """
+    return fft(input_, axes, unitary=unitary, inverse=True, **extra_flags)
 
 
 # ---------------------------------------------------------------------------
@@ -44,11 +168,11 @@ __all__ = list(_generated_all)
 def ecalib(
     kspace: torch.Tensor,
     *,
-    calib_size: int | None = None,
-    maps: int = 1,
+    calib_size: int | tuple[int, int, int] | None = None,
+    maps: int | None = None,
     threshold: float | None = None,
     crop: float | None = None,
-    softcrop: bool = False,
+    smooth: bool = False,
     intensity: bool = False,
     weighting: bool = False,
     **extra_flags: Any,
@@ -59,34 +183,39 @@ def ecalib(
     (ACS) region of k-space by eigen-decomposition of a calibration matrix.
 
     .. note::
-        **CUDA:** CPU only.  CUDA tensors are automatically moved to CPU before
-        dispatch and returned to the original device.
+        **CUDA:** GPU-capable when BART is compiled with ``USE_CUDA=ON``
+        (pass ``g=True`` via ``**extra_flags`` to enable).
 
     Parameters
     ----------
     kspace : torch.Tensor
         Fully-sampled calibration k-space or k-space containing an ACS region.
         Expected shape (C-order): ``(ncoils[, nz], ny, nx)``.
-    calib_size : int, optional
-        Size of the calibration region in each dimension (``-r``).
+    calib_size : int or tuple of int, optional
+        Size of the calibration region (``-r``).  A single int is applied
+        uniformly to all dimensions; a 3-tuple sets ``(read, phase1, phase2)``
+        (i.e. ``(x, y, z)`` in BART convention) independently.
         ``None`` → BART auto-detects.
     maps : int, optional
-        Number of ESPIRiT maps to compute (``-m``).  ``1`` (default) is
-        sufficient for most applications; ``2`` handles phase singularities.
+        Number of ESPIRiT maps to compute (``-m``).  ``None`` → BART default
+        (``1``).  Use ``2`` to handle phase singularities.
     threshold : float, optional
         Singular-value threshold for the calibration matrix (``-t``).
-        ``None`` → BART default (``0.001``).
+        ``None`` → BART default.
     crop : float, optional
         Crop sensitivity maps below this image-domain threshold (``-c``).
-    softcrop : bool, optional
-        Use soft-crop (``-S``).  Default ``False``.
+        ``None`` → BART default.
+    smooth : bool, optional
+        Create maps with smooth transitions using Soft-SENSE (``-S``).
+        Default ``False``.
     intensity : bool, optional
         Intensity-correction (``-I``).  Default ``False``.
     weighting : bool, optional
-        Apply k-space weighting (``-W``).  Default ``False``.
+        Apply soft-weighting of the singular vectors (``-W``).
+        Default ``False``.
     **extra_flags :
         Any additional BART ``ecalib`` flags passed directly (e.g.
-        ``v=True`` for verbose output).
+        ``v=0.001`` for noise variance).
 
     Returns
     -------
@@ -96,7 +225,7 @@ def ecalib(
     Examples
     --------
     >>> import bartorch.tools as bt
-    >>> kspace = bt.phantom([256, 256], kspace=True, ncoils=8)
+    >>> kspace = bt.phantom([256, 256], s=8)
     >>> sens = bt.ecalib(kspace, calib_size=24)
     """
     return _generated.ecalib(
@@ -105,7 +234,7 @@ def ecalib(
         m=maps,
         t=threshold,
         c=crop,
-        S=softcrop or None,
+        S=smooth or None,
         I=intensity or None,
         W=weighting or None,
         **extra_flags,
@@ -137,7 +266,7 @@ def caldir(
     kspace : torch.Tensor
         Calibration k-space (C-order).
     calib_size : int
-        Size of the calibration region (positional BART argument).
+        Size of the calibration region (positional BART argument ``cal_size``).
     **extra_flags :
         Additional BART ``caldir`` flags.
 
@@ -149,10 +278,10 @@ def caldir(
     Examples
     --------
     >>> import bartorch.tools as bt
-    >>> kspace = bt.phantom([256, 256], kspace=True, ncoils=8)
+    >>> kspace = bt.phantom([256, 256], s=8)
     >>> sens = bt.caldir(kspace, calib_size=24)
     """
-    return _generated.caldir(kspace, r=calib_size, **extra_flags)
+    return _generated.caldir(kspace, calib_size, **extra_flags)
 
 
 # ---------------------------------------------------------------------------
@@ -200,10 +329,6 @@ Single wavelet::
 TV + wavelet::
 
     pics(kspace, sens, R=["T:7:0:0.002", "W:7:0:0.005"])
-
-L1-shorthand (equivalent to ``R="W:7:0:lambda_"``)::
-
-    pics(kspace, sens, lambda_=0.01, l1=True)
 """
 
 
@@ -219,16 +344,11 @@ def pics(
     # Regularisation
     lambda_: float | None = None,
     R: list[str] | str | None = None,
-    l1: bool = False,
-    l2: bool = False,
     # Solver
-    iter_: int = 30,
-    inner_iter: int | None = None,
-    tol: float | None = None,
+    iter_: int | None = None,
     step: float | None = None,
-    admm: bool = False,
-    admm_lambda: float | None = None,
-    cg_lambda: float | None = None,
+    admm_rho: float | None = None,
+    cg_iter: int | None = None,
     # Output
     real: bool = False,
     gpu: bool = False,
@@ -260,39 +380,29 @@ def pics(
     Regularisation
     --------------
     lambda_ : float, optional
-        Regularisation strength λ (``-r``).  Used with ``-l1``/``-l2`` or as
-        the default lambda for ``-R`` specs.
+        Regularisation strength λ (``-r``).
     R : str or list of str, optional
         BART regularisation specification(s) (``-R``).
 
 """ + _R_GUIDE + """
-    l1 : bool, optional
-        L1 regularisation flag (``-l1``).  Default ``False``.
-    l2 : bool, optional
-        L2 (Tikhonov) regularisation flag (``-l2``).  Default ``False``.
-
     Solver
     ------
     iter_ : int, optional
-        Maximum outer solver iterations (``-i``).  Default ``30``.
-    inner_iter : int, optional
-        Number of inner CG iterations (``-n``).
-    tol : float, optional
-        Convergence tolerance (``-t``).  ``None`` → iterate for exactly
-        *iter_* steps.
+        Maximum number of solver iterations (``-i``).  ``None`` → BART
+        default.
     step : float, optional
-        Step size (``-s``).
-    admm : bool, optional
-        Use ADMM algorithm (``-a``).  Default ``False``.
-    admm_lambda : float, optional
-        ADMM penalty parameter (``-A``).
-    cg_lambda : float, optional
-        Tikhonov regularisation for the inner CG solve (``-K``).
+        Iteration step size (``-s``).
+    admm_rho : float, optional
+        ADMM penalty parameter ρ (``-u``).  Setting this enables the ADMM
+        solver; ``None`` uses the default IST/FISTA solver.
+    cg_iter : int, optional
+        Maximum inner CG iterations (ADMM only) (``-C``).
 
     Output
     ------
     real : bool, optional
-        Cast result to real-valued image (``-c``).  Default ``False``.
+        Real-value constraint: cast result to real-valued image (``-c``).
+        Default ``False``.
     gpu : bool, optional
         Use GPU via BART's internal CUDA support (``-g``).  Requires BART
         compiled with ``USE_CUDA=ON``.  Default ``False``.
@@ -304,10 +414,11 @@ def pics(
     init : str, optional
         Warm-start initialisation CFL (``-W``).
     fast_est : bool, optional
-        Fast operator-norm estimation (``-e``).  Default ``False``.
+        Scale step size based on max. eigenvalue (``-e``).  Default ``False``.
     **extra_flags :
         Any additional BART ``pics`` flags not listed above, passed directly.
-        For example ``P=0.1`` → ``-P 0.1``, ``N=True`` → ``-N``.
+        For example ``R="W:7:0:0.005"`` (via ``R=`` parameter above),
+        ``p="mask.cfl"`` → ``-p mask.cfl``, ``N=True`` → ``-N``.
 
     Returns
     -------
@@ -319,7 +430,7 @@ def pics(
     Basic PICS with wavelet regularisation:
 
     >>> import bartorch.tools as bt
-    >>> kspace = bt.phantom([256, 256], kspace=True, ncoils=8)
+    >>> kspace = bt.phantom([256, 256], s=8)
     >>> sens   = bt.ecalib(kspace, calib_size=24)
     >>> reco   = bt.pics(kspace, sens, R="W:7:0:0.005")
 
@@ -327,28 +438,19 @@ def pics(
 
     >>> reco = bt.pics(kspace, sens, R=["T:7:0:0.002", "W:7:0:0.005"])
 
-    L1-Wavelet shorthand:
-
-    >>> reco = bt.pics(kspace, sens, lambda_=0.01, l1=True)
-
     ADMM solver with TV:
 
-    >>> reco = bt.pics(kspace, sens, R="T:7:0:0.01", admm=True)
+    >>> reco = bt.pics(kspace, sens, R="T:7:0:0.01", admm_rho=0.01)
     """
     return _generated.pics(
         kspace,
         sens,
         r=lambda_,
         R=R,
-        l1=l1 or None,
-        l2=l2 or None,
         i=iter_,
-        n=inner_iter,
-        t=tol,
         s=step,
-        a=admm or None,
-        A=admm_lambda,
-        K=cg_lambda,
+        u=admm_rho,
+        C=cg_iter,
         c=real or None,
         g=gpu or None,
         B=subspace_basis,
@@ -357,3 +459,245 @@ def pics(
         **extra_flags,
     )
 
+
+# ---------------------------------------------------------------------------
+# Nonlinear inversion (nlinv)
+# ---------------------------------------------------------------------------
+
+
+def nlinv(
+    kspace: torch.Tensor,
+    *,
+    output_dims: list[int] | None = None,
+    iter_: int | None = None,
+    nmaps: int | None = None,
+    gpu: bool = False,
+    **extra_flags: Any,
+) -> torch.Tensor | tuple[torch.Tensor, ...]:
+    """Jointly estimate image and coil sensitivities via nonlinear inversion.
+
+    Iteratively solves the nonlinear inverse problem of joint image and
+    sensitivity estimation (Newton-CG / IRGNM).
+
+    .. note::
+        **CUDA:** GPU-capable when compiled with ``USE_CUDA=ON`` (``gpu=True``).
+
+    Parameters
+    ----------
+    kspace : torch.Tensor
+        Under-sampled k-space data (C-order).
+    output_dims : list[int], optional
+        Expected output shape; ``None`` to infer at runtime.
+    iter_ : int, optional
+        Number of Newton steps (``-i``).  ``None`` → BART default.
+    nmaps : int, optional
+        Number of ENLIVE maps to reconstruct (``-m``).  ``None`` → BART
+        default (``1``).
+    gpu : bool, optional
+        Use GPU via BART's internal CUDA support (``-g``).  Default ``False``.
+    **extra_flags :
+        Any additional BART ``nlinv`` flags forwarded directly (e.g.
+        ``c=True`` for real-value constraint, ``N=True`` to skip
+        normalisation, ``alpha=1e-3`` for regularisation).
+
+    Returns
+    -------
+    torch.Tensor or tuple of torch.Tensor
+        Reconstructed image (and optionally sensitivity maps).
+
+    Examples
+    --------
+    >>> import bartorch.tools as bt
+    >>> kspace = bt.phantom([256, 256], s=8)
+    >>> image  = bt.nlinv(kspace, iter_=8)
+    """
+    return _generated.nlinv(
+        kspace,
+        output_dims=output_dims,
+        i=iter_,
+        m=nmaps,
+        g=gpu or None,
+        **extra_flags,
+    )
+
+
+# ---------------------------------------------------------------------------
+# Model-based reconstruction (moba)
+# ---------------------------------------------------------------------------
+
+
+def moba(
+    kspace: torch.Tensor,
+    TI_per_TE: torch.Tensor,
+    *,
+    output_dims: list[int] | None = None,
+    model: int | None = None,
+    iter_: int | None = None,
+    inner_iter: int | None = None,
+    min_reg: float | None = None,
+    gpu: bool = False,
+    **extra_flags: Any,
+) -> torch.Tensor | tuple[torch.Tensor, ...]:
+    """Model-based quantitative MRI reconstruction (MOBA).
+
+    Reconstructs quantitative parameter maps (e.g. T1, T2, fat/water) directly
+    from multi-contrast k-space data by fitting a forward signal model via
+    Gauss-Newton iteration.
+
+    .. note::
+        **CUDA:** GPU-capable when compiled with ``USE_CUDA=ON`` (``gpu=True``).
+
+    Parameters
+    ----------
+    kspace : torch.Tensor
+        Multi-contrast k-space data (C-order).
+    TI_per_TE : torch.Tensor
+        Timing array: inversion times (TI) for T1 models, echo times (TE)
+        for T2/T2* models.  The correct interpretation depends on ``model``.
+    output_dims : list[int], optional
+        Expected output shape; ``None`` to infer at runtime.
+    model : int, optional
+        Signal model to fit (``-m``).  Selected from BART's MGRE model enum:
+
+        ===  ==========  =============================================
+        ID   Name        Description
+        ===  ==========  =============================================
+        0    WF          Water-Fat (Dixon)
+        1    WFR2S       Water-Fat + R2* (default)
+        2    WF2R2S      Water-Fat with two R2* components
+        3    R2S         R2* only
+        4    PHASEDIFF   Phase-difference fat-water
+        ===  ==========  =============================================
+
+        Run ``bart moba -h`` for the complete list.  ``None`` → BART
+        default (``WFR2S = 1``).
+    iter_ : int, optional
+        Number of Gauss-Newton (outer) iterations (``-i``).  ``None`` →
+        BART default.
+    inner_iter : int, optional
+        Number of inner CG iterations per Gauss-Newton step (``-C``).
+        ``None`` → BART default.
+    min_reg : float, optional
+        Minimum regularisation parameter (``-j``).  ``None`` → BART
+        default.
+    gpu : bool, optional
+        Use GPU via BART's internal CUDA support (``-g``).  Default ``False``.
+    **extra_flags :
+        Any additional BART ``moba`` flags forwarded directly (e.g.
+        ``l=1`` to toggle l1-wavelet regularisation, ``N=True`` to
+        normalise, ``s=0.95`` to set the step size).
+
+    Returns
+    -------
+    torch.Tensor or tuple of torch.Tensor
+        Quantitative parameter maps (C-order).
+
+    Examples
+    --------
+    >>> import bartorch.tools as bt
+    >>> # WFR2S fat-water separation
+    >>> maps = bt.moba(kspace, echo_times, model=1, iter_=10)
+    """
+    return _generated.moba(
+        kspace,
+        TI_per_TE,
+        output_dims=output_dims,
+        m=model,
+        i=iter_,
+        C=inner_iter,
+        j=min_reg,
+        g=gpu or None,
+        **extra_flags,
+    )
+
+
+# ---------------------------------------------------------------------------
+# Non-uniform FFT (nufft)
+# ---------------------------------------------------------------------------
+
+
+def nufft(
+    traj: torch.Tensor,
+    kspace: torch.Tensor,
+    *,
+    output_dims: list[int] | None = None,
+    adjoint: bool = False,
+    inverse: bool = False,
+    image_dims: tuple[int, int, int] | None = None,
+    l2_reg: float | None = None,
+    max_iter: int | None = None,
+    toeplitz: bool = False,
+    gpu: bool = False,
+    **extra_flags: Any,
+) -> torch.Tensor:
+    """Non-uniform Fast Fourier Transform (NUFFT).
+
+    Performs forward, adjoint, or iterative-inverse NUFFT using BART's
+    ``nufft`` command.
+
+    .. note::
+        **CUDA:** GPU-capable when compiled with ``USE_CUDA=ON`` (``gpu=True``).
+        When ``gpu=False`` (default), CUDA tensors are automatically moved to
+        CPU before dispatch and returned to the original device.
+
+    Parameters
+    ----------
+    traj : torch.Tensor
+        Non-Cartesian k-space trajectory (C-order).
+    kspace : torch.Tensor
+        K-space data (forward) or image data (adjoint/inverse) (C-order).
+    output_dims : list[int], optional
+        Expected output shape; ``None`` to infer at runtime.
+    adjoint : bool, optional
+        Compute the adjoint NUFFT (k-space → image) (``-a``).
+        Default ``False`` (forward: image → k-space).
+    inverse : bool, optional
+        Compute the iterative inverse NUFFT via CG (``-i``).
+        Default ``False``.
+    image_dims : tuple of (int, int, int), optional
+        Image dimensions ``x:y:z`` for adjoint/inverse NUFFT (``-x``).
+        ``None`` → infer from trajectory.
+    l2_reg : float, optional
+        L2 regularisation strength for the iterative inverse (``-l``).
+        ``None`` → no regularisation.
+    max_iter : int, optional
+        Maximum number of CG iterations for the iterative inverse (``-m``).
+        ``None`` → BART default.
+    toeplitz : bool, optional
+        Use Toeplitz embedding for the normal operator (``-t``).
+        Default ``False``.
+    gpu : bool, optional
+        Use GPU via BART's internal CUDA support (``-g``).  Requires BART
+        compiled with ``USE_CUDA=ON``.  Default ``False``.
+    **extra_flags :
+        Any additional BART ``nufft`` flags forwarded directly.
+
+    Returns
+    -------
+    torch.Tensor
+        NUFFT result (C-order).
+
+    Examples
+    --------
+    Adjoint NUFFT (gridding):
+
+    >>> import bartorch.tools as bt
+    >>> image = bt.nufft(traj, kspace, adjoint=True, image_dims=(256, 256, 1))
+
+    Iterative inverse NUFFT:
+
+    >>> image = bt.nufft(traj, kspace, inverse=True, l2_reg=1e-3, max_iter=50)
+    """
+    return _generated.nufft(
+        traj,
+        kspace,
+        output_dims=output_dims,
+        a=adjoint or None,
+        i=inverse or None,
+        x=image_dims,
+        l=l2_reg,
+        m=max_iter,
+        t=toeplitz or None,
+        g=gpu or None,
+        **extra_flags,
+    )

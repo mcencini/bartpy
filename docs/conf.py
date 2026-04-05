@@ -35,9 +35,8 @@ intersphinx_mapping = {
 }
 
 # Notebooks live in the top-level examples/ directory (symlinked as docs/examples/).
-# Never execute notebooks during the Sphinx build — they require the compiled C++
-# extension and are provided for reading / download only.
-nbsphinx_execute = "never"
+# Always execute notebooks during the Sphinx build so ReadTheDocs serves outputs.
+nbsphinx_execute = "always"
 
 # Follow symlinks so that docs/examples/ → ../examples/ is resolved correctly.
 # This is the default in Sphinx ≥ 7 but we set it explicitly for clarity.

@@ -7,6 +7,9 @@ The overrides are purely Pythonic argument-translation layers — each one calls
 its auto-generated counterpart in :mod:`bartorch.tools._generated` after
 mapping human-readable keyword names to the raw BART flag letters.
 
+This module also provides the generic dispatch helpers :func:`call_bart` and
+:func:`make_tool` (formerly in ``_dispatch.py``).
+
 The following commands are overridden:
 
 * :func:`phantom` — accepts positional ``dims`` and ergonomic ``kspace`` /
@@ -38,6 +41,9 @@ from typing import Any
 
 import torch
 
+from bartorch.core.graph import dispatch
+from bartorch.core.tensor import bart_op
+
 # Module-level reference used by the override implementations below.
 from bartorch.tools import _generated
 
@@ -48,7 +54,86 @@ from bartorch.tools._generated import *  # noqa: F401,F403
 from bartorch.tools._generated import __all__ as _generated_all
 from bartorch.utils.flags import axes_to_flags
 
-__all__ = [*_generated_all, "ifft"]
+__all__ = [*_generated_all, "call_bart", "ifft", "make_tool"]
+
+
+# ---------------------------------------------------------------------------
+# Generic dispatch helpers (formerly in _dispatch.py)
+# ---------------------------------------------------------------------------
+
+
+@bart_op
+def call_bart(
+    op_name: str,
+    *inputs: torch.Tensor,
+    output_dims: list[int] | None = None,
+    **flags: Any,
+) -> torch.Tensor | tuple[torch.Tensor, ...]:
+    """Call any BART tool by name.
+
+    This is the lowest-level Python entry point.  All array *inputs* are
+    normalised to ``complex64`` by the :func:`~bartorch.core.tensor.bart_op`
+    decorator.
+
+    Parameters
+    ----------
+    op_name : str
+        BART command name, e.g. ``"fft"``, ``"pics"``, ``"nufft"``.
+    *inputs : torch.Tensor
+        Positional array inputs (after normalisation).
+    output_dims : list[int] or None, optional
+        Expected output shape.  ``None`` lets the C++ extension infer it
+        at runtime.
+    **flags :
+        BART command-line flags, passed directly to the C++ extension.
+        Boolean ``True`` values produce bare flags (e.g. ``i=True`` →
+        ``-i``); numeric or string values produce flag-value pairs (e.g.
+        ``r=0.01`` → ``-r 0.01``).  ``None`` and ``False`` values are
+        ignored.
+
+    Returns
+    -------
+    torch.Tensor or tuple of torch.Tensor
+        Result(s) in C-order ``complex64``.
+
+    Raises
+    ------
+    ImportError
+        If the ``_bartorch_ext`` C++ extension has not been built.
+    """
+    return dispatch(op_name, list(inputs), output_dims, **flags)
+
+
+def make_tool(name: str):
+    """Return a minimal generic wrapper function for BART tool *name*.
+
+    This is the **fallback** used by ``build_tools/gen_tools.py`` when BART
+    source is unavailable.  The richer, source-parsed variant is used by
+    default — see ``gen_tools.py`` for details.
+
+    Parameters
+    ----------
+    name : str
+        BART command name.
+
+    Returns
+    -------
+    callable
+        ``fn(*inputs, output_dims=None, **flags) -> torch.Tensor``
+    """
+
+    def _tool(*inputs, output_dims=None, **flags):
+        return call_bart(name, *inputs, output_dims=output_dims, **flags)
+
+    _tool.__name__ = name
+    _tool.__qualname__ = name
+    _tool.__doc__ = (
+        f"Auto-generated wrapper for BART tool ``{name}``.\n\n"
+        "Accepts any positional ``torch.Tensor`` / NumPy array inputs followed by\n"
+        "keyword arguments that map directly to BART command-line flags.\n\n"
+        "Raises\n------\nImportError\n    If the ``_bartorch_ext`` C++ extension is absent.\n"
+    )
+    return _tool
 
 
 # ---------------------------------------------------------------------------
@@ -413,7 +498,8 @@ def pics(
     fast_est: bool = False,
     **extra_flags: Any,
 ) -> torch.Tensor:
-    """Parallel Imaging Compressed Sensing (PICS) reconstruction.
+    (
+        """Parallel Imaging Compressed Sensing (PICS) reconstruction.
 
     Iteratively reconstructs an image from under-sampled k-space data using
     sensitivity encoding and compressed-sensing regularisation.
@@ -439,7 +525,9 @@ def pics(
     R : str or list of str, optional
         BART regularisation specification(s) (``-R``).
 
-""" + _R_GUIDE + """
+"""
+        + _R_GUIDE
+        + """
     Solver
     ------
     iter_ : int, optional
@@ -497,6 +585,7 @@ def pics(
 
     >>> reco = bt.pics(kspace, sens, R="T:7:0:0.01", admm_rho=0.01)
     """
+    )
     return _generated.pics(
         kspace,
         sens,

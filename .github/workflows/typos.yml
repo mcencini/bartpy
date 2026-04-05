@@ -16,4 +16,4 @@ jobs:
         run: pip install codespell
 
       - name: Run codespell
-        run: codespell --skip="attic/,bart/,.git/,*.ipynb,pyproject.toml" --ignore-words-list=ist
+        run: codespell --skip="attic/,bart/,.git/,*.ipynb,pyproject.toml" --ignore-words-list=ist,te,reconet,pyramide

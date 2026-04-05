@@ -34,12 +34,7 @@ Any BART command can also be called via :func:`call_bart`::
 
 from __future__ import annotations
 
-from bartorch.tools._dispatch import call_bart, make_tool
-
-__all__ = [
-    "call_bart",
-    "make_tool",
-]
+__all__: list[str] = []
 
 # Full suite: auto-generated wrappers + special-case overrides.
 # Missing when the package has not been built; silently ignored.
@@ -47,7 +42,6 @@ try:
     from bartorch.tools._commands import *  # noqa: F401,F403
     from bartorch.tools._commands import __all__ as _commands_all
 
-    __all__ = [*__all__, *_commands_all]
+    __all__ = [*_commands_all]
 except ImportError:
     pass
-

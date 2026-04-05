@@ -225,8 +225,8 @@ def test_AHA_chain():
 
 def test_regularised_normal():
     A = make_op([8, 256], [8, 256])
-    I = make_op([8, 256], [8, 256])
-    reg = A.N + 0.01 * I
+    I_op = make_op([8, 256], [8, 256])
+    reg = A.N + 0.01 * I_op
     assert reg.ishape == A.ishape
     assert reg.oshape == A.ishape
 

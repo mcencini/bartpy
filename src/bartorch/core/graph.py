@@ -36,7 +36,7 @@ def _get_ext():
     if not _ext_loaded:
         _ext_loaded = True
         try:
-            import _bartorch_ext as ext  # noqa: F401
+            from bartorch import _bartorch_ext as ext  # noqa: F401
 
             _ext = ext
         except ImportError as exc:

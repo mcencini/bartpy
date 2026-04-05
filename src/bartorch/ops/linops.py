@@ -113,9 +113,7 @@ class BartLinop:
     # Operator algebra
     # ------------------------------------------------------------------
 
-    def __matmul__(
-        self, other: "BartLinop | torch.Tensor"
-    ) -> "BartLinop | torch.Tensor":
+    def __matmul__(self, other: "BartLinop | torch.Tensor") -> "BartLinop | torch.Tensor":
         """Compose with another operator, or apply to a tensor.
 
         * ``A @ B`` — operator composition: apply *B* first, then *A*.
@@ -226,7 +224,4 @@ class BartLinop:
     # ------------------------------------------------------------------
 
     def __repr__(self) -> str:
-        return (
-            f"BartLinop(ishape={self.ishape}, oshape={self.oshape}, "
-            f"kind={self._kind!r})"
-        )
+        return f"BartLinop(ishape={self.ishape}, oshape={self.oshape}, kind={self._kind!r})"

@@ -284,8 +284,16 @@ def affinereg(
     torch.Tensor
         Result array in C-order ``complex64``.
     """
-    return dispatch('affinereg', [reference, moved], output_dims,
-                    g=g or None, mask_reference=mask_reference, mask_moved=mask_moved, **extra_flags)
+    return dispatch(
+        "affinereg",
+        [reference, moved],
+        output_dims,
+        g=g or None,
+        mask_reference=mask_reference,
+        mask_moved=mask_moved,
+        **extra_flags,
+    )
+
 
 @bart_op
 def avg(
@@ -324,8 +332,8 @@ def avg(
     torch.Tensor
         Result array in C-order ``complex64``.
     """
-    return dispatch('avg', [input_], output_dims,
-                    w=w or None, bitmask=bitmask, **extra_flags)
+    return dispatch("avg", [input_], output_dims, w=w or None, bitmask=bitmask, **extra_flags)
+
 
 @bart_op
 def bin(
@@ -410,8 +418,26 @@ def bin(
     torch.Tensor
         Result array in C-order ``complex64``.
     """
-    return dispatch('bin', [label, src], output_dims,
-                    o=o or None, M=M or None, l=l, R=R, C=C, r=r, c=c, a=a, A=A, O=O, x=x, stream=stream or None, zero_fill=zero_fill, **extra_flags)
+    return dispatch(
+        "bin",
+        [label, src],
+        output_dims,
+        o=o or None,
+        M=M or None,
+        l=l,
+        R=R,
+        C=C,
+        r=r,
+        c=c,
+        a=a,
+        A=A,
+        O=O,
+        x=x,
+        stream=stream or None,
+        zero_fill=zero_fill,
+        **extra_flags,
+    )
+
 
 @bart_op
 def bitmask(
@@ -445,8 +471,8 @@ def bitmask(
     torch.Tensor
         Result array in C-order ``complex64``.
     """
-    return dispatch('bitmask', [], output_dims,
-                    b=b or None, **extra_flags)
+    return dispatch("bitmask", [], output_dims, b=b or None, **extra_flags)
+
 
 @bart_op
 def bloch(
@@ -476,8 +502,8 @@ def bloch(
     torch.Tensor
         Result array in C-order ``complex64``.
     """
-    return dispatch('bloch', [], output_dims,
-                    **extra_flags)
+    return dispatch("bloch", [], output_dims, **extra_flags)
+
 
 @bart_op
 def cabs(
@@ -487,7 +513,7 @@ def cabs(
     **extra_flags: Any,
 ) -> torch.Tensor | tuple[torch.Tensor, ...]:
     """
-    Absolute value of array (|<input>|).
+    Absolute value of array (\\|<input>\\|).
 
     Equivalent to calling ``bart cabs`` with the given arguments.
     See the BART documentation for full details.
@@ -510,8 +536,8 @@ def cabs(
     torch.Tensor
         Result array in C-order ``complex64``.
     """
-    return dispatch('cabs', [input_], output_dims,
-                    **extra_flags)
+    return dispatch("cabs", [input_], output_dims, **extra_flags)
+
 
 @bart_op
 def calc(
@@ -547,8 +573,8 @@ def calc(
     torch.Tensor
         Result array in C-order ``complex64``.
     """
-    return dispatch('calc', [input_], output_dims,
-                    func=func, **extra_flags)
+    return dispatch("calc", [input_], output_dims, func=func, **extra_flags)
+
 
 @bart_op
 def caldir(
@@ -584,8 +610,8 @@ def caldir(
     torch.Tensor
         Result array in C-order ``complex64``.
     """
-    return dispatch('caldir', [input_], output_dims,
-                    cal_size=cal_size, **extra_flags)
+    return dispatch("caldir", [input_], output_dims, cal_size=cal_size, **extra_flags)
+
 
 @bart_op
 def calmat(
@@ -634,8 +660,8 @@ def calmat(
     torch.Tensor
         Result array in C-order ``complex64``.
     """
-    return dispatch('calmat', [kspace], output_dims,
-                    C=C or None, k=k, K=K, r=r, R=R, **extra_flags)
+    return dispatch("calmat", [kspace], output_dims, C=C or None, k=k, K=K, r=r, R=R, **extra_flags)
+
 
 @bart_op
 def carg(
@@ -668,8 +694,8 @@ def carg(
     torch.Tensor
         Result array in C-order ``complex64``.
     """
-    return dispatch('carg', [input_], output_dims,
-                    **extra_flags)
+    return dispatch("carg", [input_], output_dims, **extra_flags)
+
 
 @bart_op
 def casorati(
@@ -703,8 +729,8 @@ def casorati(
     torch.Tensor
         Result array in C-order ``complex64``.
     """
-    return dispatch('casorati', [input_], output_dims,
-                    **extra_flags)
+    return dispatch("casorati", [input_], output_dims, **extra_flags)
+
 
 @bart_op
 def cc(
@@ -754,8 +780,10 @@ def cc(
     torch.Tensor
         Result array in C-order ``complex64``.
     """
-    return dispatch('cc', [kspace], output_dims,
-                    M=M or None, A=A or None, p=p, r=r, R=R, **extra_flags)
+    return dispatch(
+        "cc", [kspace], output_dims, M=M or None, A=A or None, p=p, r=r, R=R, **extra_flags
+    )
+
 
 @bart_op
 def ccapply(
@@ -805,8 +833,17 @@ def ccapply(
     torch.Tensor
         Result array in C-order ``complex64``.
     """
-    return dispatch('ccapply', [kspace, cc_matrix], output_dims,
-                    u=u or None, t=t or None, p=p, A=A, **extra_flags)
+    return dispatch(
+        "ccapply",
+        [kspace, cc_matrix],
+        output_dims,
+        u=u or None,
+        t=t or None,
+        p=p,
+        A=A,
+        **extra_flags,
+    )
+
 
 @bart_op
 def cdf97(
@@ -845,8 +882,8 @@ def cdf97(
     torch.Tensor
         Result array in C-order ``complex64``.
     """
-    return dispatch('cdf97', [input_], output_dims,
-                    i=i or None, bitmask=bitmask, **extra_flags)
+    return dispatch("cdf97", [input_], output_dims, i=i or None, bitmask=bitmask, **extra_flags)
+
 
 @bart_op
 def circshift(
@@ -885,8 +922,8 @@ def circshift(
     torch.Tensor
         Result array in C-order ``complex64``.
     """
-    return dispatch('circshift', [input_], output_dims,
-                    dim=dim, shift=shift, **extra_flags)
+    return dispatch("circshift", [input_], output_dims, dim=dim, shift=shift, **extra_flags)
+
 
 @bart_op
 def coils(
@@ -934,8 +971,10 @@ def coils(
     torch.Tensor
         Result array in C-order ``complex64``.
     """
-    return dispatch('coils', [], output_dims,
-                    k=k or None, L=L or None, n=n, b=b, t=t, **extra_flags)
+    return dispatch(
+        "coils", [], output_dims, k=k or None, L=L or None, n=n, b=b, t=t, **extra_flags
+    )
+
 
 @bart_op
 def compress(
@@ -974,8 +1013,8 @@ def compress(
     torch.Tensor
         Result array in C-order ``complex64``.
     """
-    return dispatch('compress', [input_, mask], output_dims,
-                    d=d or None, **extra_flags)
+    return dispatch("compress", [input_, mask], output_dims, d=d or None, **extra_flags)
+
 
 @bart_op
 def conj(
@@ -1008,8 +1047,8 @@ def conj(
     torch.Tensor
         Result array in C-order ``complex64``.
     """
-    return dispatch('conj', [input_], output_dims,
-                    **extra_flags)
+    return dispatch("conj", [input_], output_dims, **extra_flags)
+
 
 @bart_op
 def conv(
@@ -1048,8 +1087,8 @@ def conv(
     torch.Tensor
         Result array in C-order ``complex64``.
     """
-    return dispatch('conv', [input_, kernel], output_dims,
-                    bitmask=bitmask, **extra_flags)
+    return dispatch("conv", [input_, kernel], output_dims, bitmask=bitmask, **extra_flags)
+
 
 @bart_op
 def conway(
@@ -1088,8 +1127,8 @@ def conway(
     torch.Tensor
         Result array in C-order ``complex64``.
     """
-    return dispatch('conway', [input_], output_dims,
-                    P=P or None, n=n, **extra_flags)
+    return dispatch("conway", [input_], output_dims, P=P or None, n=n, **extra_flags)
+
 
 @bart_op
 def copy(
@@ -1126,8 +1165,8 @@ def copy(
     torch.Tensor
         Result array in C-order ``complex64``.
     """
-    return dispatch('copy', [input_, output], output_dims,
-                    **extra_flags)
+    return dispatch("copy", [input_, output], output_dims, **extra_flags)
+
 
 @bart_op
 def cpyphs(
@@ -1160,8 +1199,8 @@ def cpyphs(
     torch.Tensor
         Result array in C-order ``complex64``.
     """
-    return dispatch('cpyphs', [input_], output_dims,
-                    **extra_flags)
+    return dispatch("cpyphs", [input_], output_dims, **extra_flags)
+
 
 @bart_op
 def creal(
@@ -1194,8 +1233,8 @@ def creal(
     torch.Tensor
         Result array in C-order ``complex64``.
     """
-    return dispatch('creal', [input_], output_dims,
-                    **extra_flags)
+    return dispatch("creal", [input_], output_dims, **extra_flags)
+
 
 @bart_op
 def crop(
@@ -1235,8 +1274,8 @@ def crop(
     torch.Tensor
         Result array in C-order ``complex64``.
     """
-    return dispatch('crop', [input_], output_dims,
-                    dimension=dimension, size=size, **extra_flags)
+    return dispatch("crop", [input_], output_dims, dimension=dimension, size=size, **extra_flags)
+
 
 @bart_op
 def cunet(
@@ -1285,8 +1324,18 @@ def cunet(
     torch.Tensor
         Result array in C-order ``complex64``.
     """
-    return dispatch('cunet', [images], output_dims,
-                    n=n or None, r=r or None, l=l, b=b, g=g or None, **extra_flags)
+    return dispatch(
+        "cunet",
+        [images],
+        output_dims,
+        n=n or None,
+        r=r or None,
+        l=l,
+        b=b,
+        g=g or None,
+        **extra_flags,
+    )
+
 
 @bart_op
 def delta(
@@ -1325,8 +1374,8 @@ def delta(
     torch.Tensor
         Result array in C-order ``complex64``.
     """
-    return dispatch('delta', [], output_dims,
-                    dims=dims, flags=flags, size=size, **extra_flags)
+    return dispatch("delta", [], output_dims, dims=dims, flags=flags, size=size, **extra_flags)
+
 
 @bart_op
 def denoise(
@@ -1447,8 +1496,39 @@ def denoise(
     torch.Tensor
         Result array in C-order ``complex64``.
     """
-    return dispatch('denoise', [image], output_dims,
-                    n=n or None, N=N or None, g=g or None, e=e or None, H=H or None, D=D or None, F=F or None, J=J or None, S=S or None, r=r, s=s, i=i, b=b, d=d, u=u, C=C, w=w, adaptive_stepsize=adaptive_stepsize or None, asl=asl or None, teasl=teasl or None, fista_last=fista_last or None, theta=theta, alpha=alpha, gamma=gamma, wavelet=wavelet, fista_pqr=fista_pqr, **extra_flags)
+    return dispatch(
+        "denoise",
+        [image],
+        output_dims,
+        n=n or None,
+        N=N or None,
+        g=g or None,
+        e=e or None,
+        H=H or None,
+        D=D or None,
+        F=F or None,
+        J=J or None,
+        S=S or None,
+        r=r,
+        s=s,
+        i=i,
+        b=b,
+        d=d,
+        u=u,
+        C=C,
+        w=w,
+        adaptive_stepsize=adaptive_stepsize or None,
+        asl=asl or None,
+        teasl=teasl or None,
+        fista_last=fista_last or None,
+        theta=theta,
+        alpha=alpha,
+        gamma=gamma,
+        wavelet=wavelet,
+        fista_pqr=fista_pqr,
+        **extra_flags,
+    )
+
 
 @bart_op
 def ecalib(
@@ -1569,8 +1649,39 @@ def ecalib(
     torch.Tensor
         Result array in C-order ``complex64``.
     """
-    return dispatch('ecalib', [kspace], output_dims,
-                    S=S or None, W=W or None, I=I or None, flag_1=flag_1 or None, P=P or None, N=N or None, A=A or None, O=O or None, V=V or None, C=C or None, g=g or None, a=a or None, t=t, c=c, k=k, K=K, r=r, R=R, m=m, b=b, p=p, n=n, v=v, e=e, d=d, i=i, **extra_flags)
+    return dispatch(
+        "ecalib",
+        [kspace],
+        output_dims,
+        S=S or None,
+        W=W or None,
+        I=I or None,
+        flag_1=flag_1 or None,
+        P=P or None,
+        N=N or None,
+        A=A or None,
+        O=O or None,
+        V=V or None,
+        C=C or None,
+        g=g or None,
+        a=a or None,
+        t=t,
+        c=c,
+        k=k,
+        K=K,
+        r=r,
+        R=R,
+        m=m,
+        b=b,
+        p=p,
+        n=n,
+        v=v,
+        e=e,
+        d=d,
+        i=i,
+        **extra_flags,
+    )
+
 
 @bart_op
 def ecaltwo(
@@ -1629,8 +1740,21 @@ def ecaltwo(
     torch.Tensor
         Result array in C-order ``complex64``.
     """
-    return dispatch('ecaltwo', [input_], output_dims,
-                    S=S or None, O=O or None, g=g or None, c=c, m=m, x=x, y=y, z=z, **extra_flags)
+    return dispatch(
+        "ecaltwo",
+        [input_],
+        output_dims,
+        S=S or None,
+        O=O or None,
+        g=g or None,
+        c=c,
+        m=m,
+        x=x,
+        y=y,
+        z=z,
+        **extra_flags,
+    )
+
 
 @bart_op
 def epg(
@@ -1697,8 +1821,24 @@ def epg(
     torch.Tensor
         Result array in C-order ``complex64``.
     """
-    return dispatch('epg', [], output_dims,
-                    flag_1=flag_1, flag_2=flag_2, b=b, o=o, r=r, e=e, f=f, s=s, n=n, u=u, v=v, **extra_flags)
+    return dispatch(
+        "epg",
+        [],
+        output_dims,
+        flag_1=flag_1,
+        flag_2=flag_2,
+        b=b,
+        o=o,
+        r=r,
+        e=e,
+        f=f,
+        s=s,
+        n=n,
+        u=u,
+        v=v,
+        **extra_flags,
+    )
+
 
 @bart_op
 def estdelay(
@@ -1750,8 +1890,18 @@ def estdelay(
     torch.Tensor
         Result array in C-order ``complex64``.
     """
-    return dispatch('estdelay', [trajectory, data], output_dims,
-                    R=R or None, B=B or None, p=p, n=n, r=r, **extra_flags)
+    return dispatch(
+        "estdelay",
+        [trajectory, data],
+        output_dims,
+        R=R or None,
+        B=B or None,
+        p=p,
+        n=n,
+        r=r,
+        **extra_flags,
+    )
+
 
 @bart_op
 def estdims(
@@ -1784,8 +1934,8 @@ def estdims(
     torch.Tensor
         Result array in C-order ``complex64``.
     """
-    return dispatch('estdims', [traj], output_dims,
-                    **extra_flags)
+    return dispatch("estdims", [traj], output_dims, **extra_flags)
+
 
 @bart_op
 def estmotion(
@@ -1843,8 +1993,19 @@ def estmotion(
     torch.Tensor
         Result array in C-order ``complex64``.
     """
-    return dispatch('estmotion', [reference, moved], output_dims,
-                    g=g or None, l=l, r=r, optical_flow=optical_flow or None, max_flow=max_flow, flags=flags, **extra_flags)
+    return dispatch(
+        "estmotion",
+        [reference, moved],
+        output_dims,
+        g=g or None,
+        l=l,
+        r=r,
+        optical_flow=optical_flow or None,
+        max_flow=max_flow,
+        flags=flags,
+        **extra_flags,
+    )
+
 
 @bart_op
 def estscaling(
@@ -1887,8 +2048,8 @@ def estscaling(
     torch.Tensor
         Result array in C-order ``complex64``.
     """
-    return dispatch('estscaling', [k_space], output_dims,
-                    i=i or None, x=x, p=p, **extra_flags)
+    return dispatch("estscaling", [k_space], output_dims, i=i or None, x=x, p=p, **extra_flags)
+
 
 @bart_op
 def estshift(
@@ -1930,8 +2091,8 @@ def estshift(
     torch.Tensor
         Result array in C-order ``complex64``.
     """
-    return dispatch('estshift', [arg1, arg2], output_dims,
-                    f=f or None, flags=flags, **extra_flags)
+    return dispatch("estshift", [arg1, arg2], output_dims, f=f or None, flags=flags, **extra_flags)
+
 
 @bart_op
 def estvar(
@@ -1977,8 +2138,8 @@ def estvar(
     torch.Tensor
         Result array in C-order ``complex64``.
     """
-    return dispatch('estvar', [kspace], output_dims,
-                    k=k, K=K, r=r, R=R, **extra_flags)
+    return dispatch("estvar", [kspace], output_dims, k=k, K=K, r=r, R=R, **extra_flags)
+
 
 @bart_op
 def extract(
@@ -2011,8 +2172,8 @@ def extract(
     torch.Tensor
         Result array in C-order ``complex64``.
     """
-    return dispatch('extract', [input_], output_dims,
-                    **extra_flags)
+    return dispatch("extract", [input_], output_dims, **extra_flags)
+
 
 @bart_op
 def fakeksp(
@@ -2055,8 +2216,8 @@ def fakeksp(
     torch.Tensor
         Result array in C-order ``complex64``.
     """
-    return dispatch('fakeksp', [image, kspace, sens], output_dims,
-                    r=r or None, **extra_flags)
+    return dispatch("fakeksp", [image, kspace, sens], output_dims, r=r or None, **extra_flags)
+
 
 @bart_op
 def fft(
@@ -2101,8 +2262,17 @@ def fft(
     torch.Tensor
         Result array in C-order ``complex64``.
     """
-    return dispatch('fft', [input_], output_dims,
-                    u=u or None, i=i or None, n=n or None, bitmask=bitmask, **extra_flags)
+    return dispatch(
+        "fft",
+        [input_],
+        output_dims,
+        u=u or None,
+        i=i or None,
+        n=n or None,
+        bitmask=bitmask,
+        **extra_flags,
+    )
+
 
 @bart_op
 def fftmod(
@@ -2144,8 +2314,10 @@ def fftmod(
     torch.Tensor
         Result array in C-order ``complex64``.
     """
-    return dispatch('fftmod', [input_], output_dims,
-                    b=b or None, i=i or None, bitmask=bitmask, **extra_flags)
+    return dispatch(
+        "fftmod", [input_], output_dims, b=b or None, i=i or None, bitmask=bitmask, **extra_flags
+    )
+
 
 @bart_op
 def fftrot(
@@ -2187,8 +2359,10 @@ def fftrot(
     torch.Tensor
         Result array in C-order ``complex64``.
     """
-    return dispatch('fftrot', [input_], output_dims,
-                    dim1=dim1, dim2=dim2, theta=theta, **extra_flags)
+    return dispatch(
+        "fftrot", [input_], output_dims, dim1=dim1, dim2=dim2, theta=theta, **extra_flags
+    )
+
 
 @bart_op
 def fftshift(
@@ -2227,8 +2401,8 @@ def fftshift(
     torch.Tensor
         Result array in C-order ``complex64``.
     """
-    return dispatch('fftshift', [input_], output_dims,
-                    b=b or None, bitmask=bitmask, **extra_flags)
+    return dispatch("fftshift", [input_], output_dims, b=b or None, bitmask=bitmask, **extra_flags)
+
 
 @bart_op
 def filter(
@@ -2291,8 +2465,21 @@ def filter(
     torch.Tensor
         Result array in C-order ``complex64``.
     """
-    return dispatch('filter', [input_], output_dims,
-                    G=G or None, Z=Z or None, m=m, l=l, a=a, C=C, d=d, b=b, **extra_flags)
+    return dispatch(
+        "filter",
+        [input_],
+        output_dims,
+        G=G or None,
+        Z=Z or None,
+        m=m,
+        l=l,
+        a=a,
+        C=C,
+        d=d,
+        b=b,
+        **extra_flags,
+    )
+
 
 @bart_op
 def flatten(
@@ -2325,8 +2512,8 @@ def flatten(
     torch.Tensor
         Result array in C-order ``complex64``.
     """
-    return dispatch('flatten', [input_], output_dims,
-                    **extra_flags)
+    return dispatch("flatten", [input_], output_dims, **extra_flags)
+
 
 @bart_op
 def flip(
@@ -2362,8 +2549,8 @@ def flip(
     torch.Tensor
         Result array in C-order ``complex64``.
     """
-    return dispatch('flip', [input_], output_dims,
-                    bitmask=bitmask, **extra_flags)
+    return dispatch("flip", [input_], output_dims, bitmask=bitmask, **extra_flags)
+
 
 @bart_op
 def fmac(
@@ -2410,8 +2597,10 @@ def fmac(
     torch.Tensor
         Result array in C-order ``complex64``.
     """
-    return dispatch('fmac', [input1, input2], output_dims,
-                    A=A or None, C=C or None, s=s, **extra_flags)
+    return dispatch(
+        "fmac", [input1, input2], output_dims, A=A or None, C=C or None, s=s, **extra_flags
+    )
+
 
 @bart_op
 def fovshift(
@@ -2457,8 +2646,8 @@ def fovshift(
     torch.Tensor
         Result array in C-order ``complex64``.
     """
-    return dispatch('fovshift', [input_], output_dims,
-                    p=p or None, t=t, S=S, s=s, **extra_flags)
+    return dispatch("fovshift", [input_], output_dims, p=p or None, t=t, S=S, s=s, **extra_flags)
+
 
 @bart_op
 def gmm(
@@ -2503,8 +2692,14 @@ def gmm(
     torch.Tensor
         Result array in C-order ``complex64``.
     """
-    return dispatch('gmm', [weights, mean_values, variances, evaluate_at_these_points], output_dims,
-                    _0=_0 or None, **extra_flags)
+    return dispatch(
+        "gmm",
+        [weights, mean_values, variances, evaluate_at_these_points],
+        output_dims,
+        _0=_0 or None,
+        **extra_flags,
+    )
+
 
 @bart_op
 def grid(
@@ -2556,8 +2751,10 @@ def grid(
     torch.Tensor
         Result array in C-order ``complex64``.
     """
-    return dispatch('grid', [], output_dims,
-                    k=k or None, t=t, T=T, b1=b1, b2=b2, b3=b3, bt=bt, **extra_flags)
+    return dispatch(
+        "grid", [], output_dims, k=k or None, t=t, T=T, b1=b1, b2=b2, b3=b3, bt=bt, **extra_flags
+    )
+
 
 @bart_op
 def grog(
@@ -2600,8 +2797,14 @@ def grog(
     torch.Tensor
         Result array in C-order ``complex64``.
     """
-    return dispatch('grog', [radial_trajectory, radial_data, gridded_trajectory], output_dims,
-                    s=s, **extra_flags)
+    return dispatch(
+        "grog",
+        [radial_trajectory, radial_data, gridded_trajectory],
+        output_dims,
+        s=s,
+        **extra_flags,
+    )
+
 
 @bart_op
 def hist(
@@ -2643,8 +2846,8 @@ def hist(
     torch.Tensor
         Result array in C-order ``complex64``.
     """
-    return dispatch('hist', [input_], output_dims,
-                    c=c or None, s=s, bitmask=bitmask, **extra_flags)
+    return dispatch("hist", [input_], output_dims, c=c or None, s=s, bitmask=bitmask, **extra_flags)
+
 
 @bart_op
 def homodyne(
@@ -2700,8 +2903,20 @@ def homodyne(
     torch.Tensor
         Result array in C-order ``complex64``.
     """
-    return dispatch('homodyne', [input_], output_dims,
-                    I=I or None, C=C or None, n=n or None, r=r, P=P, dim=dim, fraction=fraction, **extra_flags)
+    return dispatch(
+        "homodyne",
+        [input_],
+        output_dims,
+        I=I or None,
+        C=C or None,
+        n=n or None,
+        r=r,
+        P=P,
+        dim=dim,
+        fraction=fraction,
+        **extra_flags,
+    )
+
 
 @bart_op
 def ictv(
@@ -2750,8 +2965,18 @@ def ictv(
     torch.Tensor
         Result array in C-order ``complex64``.
     """
-    return dispatch('ictv', [input_], output_dims,
-                    i=i, u=u, gamma=gamma, lambda_=lambda_, flags=flags, **extra_flags)
+    return dispatch(
+        "ictv",
+        [input_],
+        output_dims,
+        i=i,
+        u=u,
+        gamma=gamma,
+        lambda_=lambda_,
+        flags=flags,
+        **extra_flags,
+    )
+
 
 @bart_op
 def index(
@@ -2801,8 +3026,19 @@ def index(
     torch.Tensor
         Result array in C-order ``complex64``.
     """
-    return dispatch('index', [], output_dims,
-                    end=end or None, log=log or None, min_=min_, max_=max_, dim=dim, size=size, **extra_flags)
+    return dispatch(
+        "index",
+        [],
+        output_dims,
+        end=end or None,
+        log=log or None,
+        min_=min_,
+        max_=max_,
+        dim=dim,
+        size=size,
+        **extra_flags,
+    )
+
 
 @bart_op
 def interpolate(
@@ -2852,8 +3088,17 @@ def interpolate(
     torch.Tensor
         Result array in C-order ``complex64``.
     """
-    return dispatch('interpolate', [input_, coordinates__default___per__displacement_field__per__affine_transform], output_dims,
-                    N=N or None, C=C or None, x=x, flags=flags, **extra_flags)
+    return dispatch(
+        "interpolate",
+        [input_, coordinates__default___per__displacement_field__per__affine_transform],
+        output_dims,
+        N=N or None,
+        C=C or None,
+        x=x,
+        flags=flags,
+        **extra_flags,
+    )
+
 
 @bart_op
 def invert(
@@ -2890,8 +3135,8 @@ def invert(
     torch.Tensor
         Result array in C-order ``complex64``.
     """
-    return dispatch('invert', [input_], output_dims,
-                    r=r, **extra_flags)
+    return dispatch("invert", [input_], output_dims, r=r, **extra_flags)
+
 
 @bart_op
 def ismrmrd(
@@ -2934,8 +3179,8 @@ def ismrmrd(
     torch.Tensor
         Result array in C-order ``complex64``.
     """
-    return dispatch('ismrmrd', [input_], output_dims,
-                    _0=_0 or None, m=m, o=o, **extra_flags)
+    return dispatch("ismrmrd", [input_], output_dims, _0=_0 or None, m=m, o=o, **extra_flags)
+
 
 @bart_op
 def itsense(
@@ -2977,8 +3222,10 @@ def itsense(
     torch.Tensor
         Result array in C-order ``complex64``.
     """
-    return dispatch('itsense', [sensitivities, kspace, pattern], output_dims,
-                    alpha=alpha, **extra_flags)
+    return dispatch(
+        "itsense", [sensitivities, kspace, pattern], output_dims, alpha=alpha, **extra_flags
+    )
+
 
 @bart_op
 def join(
@@ -3021,8 +3268,10 @@ def join(
     torch.Tensor
         Result array in C-order ``complex64``.
     """
-    return dispatch('join', [output], output_dims,
-                    a=a or None, s=s or None, dimension=dimension, **extra_flags)
+    return dispatch(
+        "join", [output], output_dims, a=a or None, s=s or None, dimension=dimension, **extra_flags
+    )
+
 
 @bart_op
 def looklocker(
@@ -3063,8 +3312,8 @@ def looklocker(
     torch.Tensor
         Result array in C-order ``complex64``.
     """
-    return dispatch('looklocker', [input_], output_dims,
-                    t=t, D=D, **extra_flags)
+    return dispatch("looklocker", [input_], output_dims, t=t, D=D, **extra_flags)
+
 
 @bart_op
 def lrmatrix(
@@ -3144,8 +3393,26 @@ def lrmatrix(
     torch.Tensor
         Result array in C-order ``complex64``.
     """
-    return dispatch('lrmatrix', [input_], output_dims,
-                    d=d or None, N=N or None, s=s or None, H=H or None, n=n or None, i=i, m=m, f=f, j=j, k=k, l=l, o=o, p=p, **extra_flags)
+    return dispatch(
+        "lrmatrix",
+        [input_],
+        output_dims,
+        d=d or None,
+        N=N or None,
+        s=s or None,
+        H=H or None,
+        n=n or None,
+        i=i,
+        m=m,
+        f=f,
+        j=j,
+        k=k,
+        l=l,
+        o=o,
+        p=p,
+        **extra_flags,
+    )
+
 
 @bart_op
 def mandelbrot(
@@ -3196,8 +3463,10 @@ def mandelbrot(
     torch.Tensor
         Result array in C-order ``complex64``.
     """
-    return dispatch('mandelbrot', [], output_dims,
-                    I=I or None, s=s, n=n, t=t, z=z, r=r, i=i, **extra_flags)
+    return dispatch(
+        "mandelbrot", [], output_dims, I=I or None, s=s, n=n, t=t, z=z, r=r, i=i, **extra_flags
+    )
+
 
 @bart_op
 def measure(
@@ -3233,8 +3502,8 @@ def measure(
     torch.Tensor
         Result array in C-order ``complex64``.
     """
-    return dispatch('measure', [reference, input_], output_dims,
-                    **extra_flags)
+    return dispatch("measure", [reference, input_], output_dims, **extra_flags)
+
 
 @bart_op
 def mip(
@@ -3277,8 +3546,10 @@ def mip(
     torch.Tensor
         Result array in C-order ``complex64``.
     """
-    return dispatch('mip', [input_], output_dims,
-                    m=m or None, a=a or None, bitmask=bitmask, **extra_flags)
+    return dispatch(
+        "mip", [input_], output_dims, m=m or None, a=a or None, bitmask=bitmask, **extra_flags
+    )
+
 
 @bart_op
 def mnist(
@@ -3327,8 +3598,16 @@ def mnist(
     torch.Tensor
         Result array in C-order ``complex64``.
     """
-    return dispatch('mnist', [input_, weights, ref_per_output], output_dims,
-                    a=a or None, t=t or None, g=g or None, **extra_flags)
+    return dispatch(
+        "mnist",
+        [input_, weights, ref_per_output],
+        output_dims,
+        a=a or None,
+        t=t or None,
+        g=g or None,
+        **extra_flags,
+    )
+
 
 @bart_op
 def moba(
@@ -3508,8 +3787,53 @@ def moba(
     torch.Tensor
         Result array in C-order ``complex64``.
     """
-    return dispatch('moba', [kspace, TI_per_TE], output_dims,
-                    F=F or None, N=N or None, J=J or None, M=M or None, O=O or None, g=g or None, k=k or None, n=n or None, m=m, l=l, i=i, j=j, u=u, C=C, s=s, B=B, b=b, d=d, f=f, p=p, I=I, t=t, o=o, e=e, no_alpha_min_exp_decay=no_alpha_min_exp_decay or None, normalize_scaling=normalize_scaling or None, R=R, positive_maps=positive_maps, not_wav_maps=not_wav_maps, l2_on_parameters=l2_on_parameters, pusteps=pusteps, ratio=ratio, l1val=l1val, temporal_damping=temporal_damping, multi_gpu=multi_gpu, img_dims=img_dims, sobolev_a=sobolev_a, sobolev_b=sobolev_b, scale_data=scale_data, scale_psf=scale_psf, **extra_flags)
+    return dispatch(
+        "moba",
+        [kspace, TI_per_TE],
+        output_dims,
+        F=F or None,
+        N=N or None,
+        J=J or None,
+        M=M or None,
+        O=O or None,
+        g=g or None,
+        k=k or None,
+        n=n or None,
+        m=m,
+        l=l,
+        i=i,
+        j=j,
+        u=u,
+        C=C,
+        s=s,
+        B=B,
+        b=b,
+        d=d,
+        f=f,
+        p=p,
+        I=I,
+        t=t,
+        o=o,
+        e=e,
+        no_alpha_min_exp_decay=no_alpha_min_exp_decay or None,
+        normalize_scaling=normalize_scaling or None,
+        R=R,
+        positive_maps=positive_maps,
+        not_wav_maps=not_wav_maps,
+        l2_on_parameters=l2_on_parameters,
+        pusteps=pusteps,
+        ratio=ratio,
+        l1val=l1val,
+        temporal_damping=temporal_damping,
+        multi_gpu=multi_gpu,
+        img_dims=img_dims,
+        sobolev_a=sobolev_a,
+        sobolev_b=sobolev_b,
+        scale_data=scale_data,
+        scale_psf=scale_psf,
+        **extra_flags,
+    )
+
 
 @bart_op
 def mobafit(
@@ -3597,8 +3921,27 @@ def mobafit(
     torch.Tensor
         Result array in C-order ``complex64``.
     """
-    return dispatch('mobafit', [enc, echo_per_contrast_images], output_dims,
-                    a=a or None, g=g or None, m=m, i=i, M=M, B=B, levenberg_marquardt=levenberg_marquardt or None, reg_against_init=reg_against_init or None, liniter=liniter, min_flag=min_flag, max_flag=max_flag, max_mag_flag=max_mag_flag, b1map=b1map, b0map=b0map, **extra_flags)
+    return dispatch(
+        "mobafit",
+        [enc, echo_per_contrast_images],
+        output_dims,
+        a=a or None,
+        g=g or None,
+        m=m,
+        i=i,
+        M=M,
+        B=B,
+        levenberg_marquardt=levenberg_marquardt or None,
+        reg_against_init=reg_against_init or None,
+        liniter=liniter,
+        min_flag=min_flag,
+        max_flag=max_flag,
+        max_mag_flag=max_mag_flag,
+        b1map=b1map,
+        b0map=b0map,
+        **extra_flags,
+    )
+
 
 @bart_op
 def mobasig(
@@ -3638,8 +3981,10 @@ def mobasig(
     torch.Tensor
         Result array in C-order ``complex64``.
     """
-    return dispatch('mobasig', [parameters_per_coefficients, encoding], output_dims,
-                    m=m, **extra_flags)
+    return dispatch(
+        "mobasig", [parameters_per_coefficients, encoding], output_dims, m=m, **extra_flags
+    )
+
 
 @bart_op
 def morphop(
@@ -3675,8 +4020,8 @@ def morphop(
     torch.Tensor
         Result array in C-order ``complex64``.
     """
-    return dispatch('morphop', [binary_input], output_dims,
-                    mask_size=mask_size, **extra_flags)
+    return dispatch("morphop", [binary_input], output_dims, mask_size=mask_size, **extra_flags)
+
 
 @bart_op
 def multicfl(
@@ -3709,8 +4054,8 @@ def multicfl(
     torch.Tensor
         Result array in C-order ``complex64``.
     """
-    return dispatch('multicfl', [], output_dims,
-                    s=s or None, **extra_flags)
+    return dispatch("multicfl", [], output_dims, s=s or None, **extra_flags)
+
 
 @bart_op
 def ncalib(
@@ -3822,8 +4167,36 @@ def ncalib(
     torch.Tensor
         Result array in C-order ``complex64``.
     """
-    return dispatch('ncalib', [kspace], output_dims,
-                    g=g or None, o=o or None, N=N or None, t=t, p=p, B=B, r=r, i=i, M=M, a=a, b=b, c=c, w=w, m=m, cgiter=cgiter, cgtol=cgtol, alpha=alpha, x=x, sens_os=sens_os, shared_img_dims=shared_img_dims, shared_col_dims=shared_col_dims, scale_loop_dims=scale_loop_dims, phase_pole=phase_pole, **extra_flags)
+    return dispatch(
+        "ncalib",
+        [kspace],
+        output_dims,
+        g=g or None,
+        o=o or None,
+        N=N or None,
+        t=t,
+        p=p,
+        B=B,
+        r=r,
+        i=i,
+        M=M,
+        a=a,
+        b=b,
+        c=c,
+        w=w,
+        m=m,
+        cgiter=cgiter,
+        cgtol=cgtol,
+        alpha=alpha,
+        x=x,
+        sens_os=sens_os,
+        shared_img_dims=shared_img_dims,
+        shared_col_dims=shared_col_dims,
+        scale_loop_dims=scale_loop_dims,
+        phase_pole=phase_pole,
+        **extra_flags,
+    )
+
 
 @bart_op
 def nlinv(
@@ -3985,8 +4358,49 @@ def nlinv(
     torch.Tensor
         Result array in C-order ``complex64``.
     """
-    return dispatch('nlinv', [kspace], output_dims,
-                    c=c or None, N=N or None, U=U or None, g=g or None, S=S or None, P=P or None, n=n or None, i=i, M=M, d=d, m=m, f=f, p=p, t=t, B=B, I=I, s=s, a=a, b=b, w=w, psf_based=psf_based or None, lowmem=lowmem or None, ret_sens_os=ret_sens_os or None, real_time=real_time or None, fast=fast or None, legacy_early_stopping=legacy_early_stopping or None, alpha=alpha, reg_iter=reg_iter, x=x, sens_dims=sens_dims, ksens_dims=ksens_dims, sens_os=sens_os, cgiter=cgiter, cgtol=cgtol, liniter=liniter, phase_pole=phase_pole, **extra_flags)
+    return dispatch(
+        "nlinv",
+        [kspace],
+        output_dims,
+        c=c or None,
+        N=N or None,
+        U=U or None,
+        g=g or None,
+        S=S or None,
+        P=P or None,
+        n=n or None,
+        i=i,
+        M=M,
+        d=d,
+        m=m,
+        f=f,
+        p=p,
+        t=t,
+        B=B,
+        I=I,
+        s=s,
+        a=a,
+        b=b,
+        w=w,
+        psf_based=psf_based or None,
+        lowmem=lowmem or None,
+        ret_sens_os=ret_sens_os or None,
+        real_time=real_time or None,
+        fast=fast or None,
+        legacy_early_stopping=legacy_early_stopping or None,
+        alpha=alpha,
+        reg_iter=reg_iter,
+        x=x,
+        sens_dims=sens_dims,
+        ksens_dims=ksens_dims,
+        sens_os=sens_os,
+        cgiter=cgiter,
+        cgtol=cgtol,
+        liniter=liniter,
+        phase_pole=phase_pole,
+        **extra_flags,
+    )
+
 
 @bart_op
 def nlinvnet(
@@ -4155,8 +4569,48 @@ def nlinvnet(
     torch.Tensor
         Result array in C-order ``complex64``.
     """
-    return dispatch('nlinvnet', [kspace, weights, output_per_reference], output_dims,
-                    i=i, s=s, L=L, ref_img=ref_img or None, ref_col_rt=ref_col_rt or None, fix_sens=fix_sens or None, init_rtnlinv=init_rtnlinv or None, t=t or None, a=a or None, rss_norm=rss_norm or None, g=g or None, ksp_training=ksp_training or None, iter_net=iter_net, sens_os=sens_os, alpha_min=alpha_min, lambda_=lambda_, lambda_sens=lambda_sens, filter_=filter_, conv_time=conv_time, x=x, pattern=pattern, trajectory=trajectory, B=B, scaling=scaling, scaling_flags=scaling_flags, b=b, l=l, mask=mask, train_loss_l2_reg=train_loss_l2_reg, ss_ksp_split=ss_ksp_split, ss_ksp_split_shared=ss_ksp_split_shared, ss_ksp_use_reco=ss_ksp_use_reco, ss_ksp_leaky=ss_ksp_leaky, temporal_train_mask=temporal_train_mask, average_coils_loss=average_coils_loss, **extra_flags)
+    return dispatch(
+        "nlinvnet",
+        [kspace, weights, output_per_reference],
+        output_dims,
+        i=i,
+        s=s,
+        L=L,
+        ref_img=ref_img or None,
+        ref_col_rt=ref_col_rt or None,
+        fix_sens=fix_sens or None,
+        init_rtnlinv=init_rtnlinv or None,
+        t=t or None,
+        a=a or None,
+        rss_norm=rss_norm or None,
+        g=g or None,
+        ksp_training=ksp_training or None,
+        iter_net=iter_net,
+        sens_os=sens_os,
+        alpha_min=alpha_min,
+        lambda_=lambda_,
+        lambda_sens=lambda_sens,
+        filter_=filter_,
+        conv_time=conv_time,
+        x=x,
+        pattern=pattern,
+        trajectory=trajectory,
+        B=B,
+        scaling=scaling,
+        scaling_flags=scaling_flags,
+        b=b,
+        l=l,
+        mask=mask,
+        train_loss_l2_reg=train_loss_l2_reg,
+        ss_ksp_split=ss_ksp_split,
+        ss_ksp_split_shared=ss_ksp_split_shared,
+        ss_ksp_use_reco=ss_ksp_use_reco,
+        ss_ksp_leaky=ss_ksp_leaky,
+        temporal_train_mask=temporal_train_mask,
+        average_coils_loss=average_coils_loss,
+        **extra_flags,
+    )
+
 
 @bart_op
 def nlmeans(
@@ -4205,8 +4659,10 @@ def nlmeans(
     torch.Tensor
         Result array in C-order ``complex64``.
     """
-    return dispatch('nlmeans', [input_], output_dims,
-                    H=H, a=a, p=p, d=d, flags=flags, **extra_flags)
+    return dispatch(
+        "nlmeans", [input_], output_dims, H=H, a=a, p=p, d=d, flags=flags, **extra_flags
+    )
+
 
 @bart_op
 def nnet(
@@ -4271,8 +4727,21 @@ def nnet(
     torch.Tensor
         Result array in C-order ``complex64``.
     """
-    return dispatch('nnet', [input_, weights, ref_per_output], output_dims,
-                    a=a or None, e=e or None, t=t or None, g=g or None, load_memory=load_memory or None, b=b, l=l, export_graph=export_graph, **extra_flags)
+    return dispatch(
+        "nnet",
+        [input_, weights, ref_per_output],
+        output_dims,
+        a=a or None,
+        e=e or None,
+        t=t or None,
+        g=g or None,
+        load_memory=load_memory or None,
+        b=b,
+        l=l,
+        export_graph=export_graph,
+        **extra_flags,
+    )
+
 
 @bart_op
 def noise(
@@ -4322,8 +4791,18 @@ def noise(
     torch.Tensor
         Result array in C-order ``complex64``.
     """
-    return dispatch('noise', [input_], output_dims,
-                    r=r or None, s=s, S=S, n=n, uniform=uniform or None, **extra_flags)
+    return dispatch(
+        "noise",
+        [input_],
+        output_dims,
+        r=r or None,
+        s=s,
+        S=S,
+        n=n,
+        uniform=uniform or None,
+        **extra_flags,
+    )
+
 
 @bart_op
 def normalize(
@@ -4362,8 +4841,8 @@ def normalize(
     torch.Tensor
         Result array in C-order ``complex64``.
     """
-    return dispatch('normalize', [input_], output_dims,
-                    b=b or None, flags=flags, **extra_flags)
+    return dispatch("normalize", [input_], output_dims, b=b or None, flags=flags, **extra_flags)
+
 
 @bart_op
 def nrmse(
@@ -4408,8 +4887,10 @@ def nrmse(
     torch.Tensor
         Result array in C-order ``complex64``.
     """
-    return dispatch('nrmse', [reference, input_], output_dims,
-                    s=s or None, t=t, S=S or None, **extra_flags)
+    return dispatch(
+        "nrmse", [reference, input_], output_dims, s=s or None, t=t, S=S or None, **extra_flags
+    )
+
 
 @bart_op
 def nufft(
@@ -4522,8 +5003,36 @@ def nufft(
     torch.Tensor
         Result array in C-order ``complex64``.
     """
-    return dispatch('nufft', [traj, input_], output_dims,
-                    a=a or None, i=i or None, t=t or None, r=r or None, c=c or None, P=P or None, s=s or None, g=g or None, flag_1=flag_1 or None, x=x, d=d, D=D, l=l, m=m, B=B, p=p, F=F, T=T, lowmem=lowmem or None, zero_mem=zero_mem or None, no_precomp=no_precomp or None, o=o, w=w, **extra_flags)
+    return dispatch(
+        "nufft",
+        [traj, input_],
+        output_dims,
+        a=a or None,
+        i=i or None,
+        t=t or None,
+        r=r or None,
+        c=c or None,
+        P=P or None,
+        s=s or None,
+        g=g or None,
+        flag_1=flag_1 or None,
+        x=x,
+        d=d,
+        D=D,
+        l=l,
+        m=m,
+        B=B,
+        p=p,
+        F=F,
+        T=T,
+        lowmem=lowmem or None,
+        zero_mem=zero_mem or None,
+        no_precomp=no_precomp or None,
+        o=o,
+        w=w,
+        **extra_flags,
+    )
+
 
 @bart_op
 def nufftbase(
@@ -4559,8 +5068,8 @@ def nufftbase(
     torch.Tensor
         Result array in C-order ``complex64``.
     """
-    return dispatch('nufftbase', [trajectory], output_dims,
-                    dimensions=dimensions, **extra_flags)
+    return dispatch("nufftbase", [trajectory], output_dims, dimensions=dimensions, **extra_flags)
+
 
 @bart_op
 def onehotenc(
@@ -4599,8 +5108,8 @@ def onehotenc(
     torch.Tensor
         Result array in C-order ``complex64``.
     """
-    return dispatch('onehotenc', [input_], output_dims,
-                    r=r or None, i=i, **extra_flags)
+    return dispatch("onehotenc", [input_], output_dims, r=r or None, i=i, **extra_flags)
+
 
 @bart_op
 def ones(
@@ -4634,8 +5143,8 @@ def ones(
     torch.Tensor
         Result array in C-order ``complex64``.
     """
-    return dispatch('ones', [], output_dims,
-                    dims=dims, **extra_flags)
+    return dispatch("ones", [], output_dims, dims=dims, **extra_flags)
+
 
 @bart_op
 def pattern(
@@ -4672,8 +5181,8 @@ def pattern(
     torch.Tensor
         Result array in C-order ``complex64``.
     """
-    return dispatch('pattern', [kspace], output_dims,
-                    s=s, **extra_flags)
+    return dispatch("pattern", [kspace], output_dims, s=s, **extra_flags)
+
 
 @bart_op
 def phantom(
@@ -4762,8 +5271,30 @@ def phantom(
     torch.Tensor
         Result array in C-order ``complex64``.
     """
-    return dispatch('phantom', [], output_dims,
-                    k=k or None, flag_3=flag_3 or None, flag_2=flag_2 or None, b=b or None, x=x, s=s, t=t, r=r, S=S, N=N, g=g, rotation_angle=rotation_angle, rotation_steps=rotation_steps, ellipsoid_center=ellipsoid_center, ellipsoid_axes=ellipsoid_axes, FILE=FILE, stl=stl, **extra_flags)
+    return dispatch(
+        "phantom",
+        [],
+        output_dims,
+        k=k or None,
+        flag_3=flag_3 or None,
+        flag_2=flag_2 or None,
+        b=b or None,
+        x=x,
+        s=s,
+        t=t,
+        r=r,
+        S=S,
+        N=N,
+        g=g,
+        rotation_angle=rotation_angle,
+        rotation_steps=rotation_steps,
+        ellipsoid_center=ellipsoid_center,
+        ellipsoid_axes=ellipsoid_axes,
+        FILE=FILE,
+        stl=stl,
+        **extra_flags,
+    )
+
 
 @bart_op
 def phasepole(
@@ -4832,8 +5363,23 @@ def phasepole(
     torch.Tensor
         Result array in C-order ``complex64``.
     """
-    return dispatch('phasepole', [input__coils_per_singularity_positions_], output_dims,
-                    c=c, w=w, a=a, t=t, d=d, n=n, espirit=espirit or None, x=x, closing=closing, center=center, **extra_flags)
+    return dispatch(
+        "phasepole",
+        [input__coils_per_singularity_positions_],
+        output_dims,
+        c=c,
+        w=w,
+        a=a,
+        t=t,
+        d=d,
+        n=n,
+        espirit=espirit or None,
+        x=x,
+        closing=closing,
+        center=center,
+        **extra_flags,
+    )
+
 
 @bart_op
 def pics(
@@ -5037,8 +5583,63 @@ def pics(
     torch.Tensor
         Result array in C-order ``complex64``.
     """
-    return dispatch('pics', [kspace, sensitivities], output_dims,
-                    c=c or None, n=n or None, N=N or None, g=g or None, e=e or None, H=H or None, D=D or None, F=F or None, J=J or None, S=S or None, K=K or None, M=M or None, r=r, s=s, i=i, t=t, p=p, b=b, T=T, W=W, d=d, O=O, o=o, u=u, C=C, q=q, f=f, w=w, L=L, B=B, P=P, gpu_gridding=gpu_gridding or None, precond=precond or None, adaptive_stepsize=adaptive_stepsize or None, asl=asl or None, teasl=teasl or None, U=U or None, no_toeplitz=no_toeplitz or None, fista_last=fista_last or None, ist_last=ist_last or None, theta=theta, alpha=alpha, gamma=gamma, shared_img_dims=shared_img_dims, psf_export=psf_export, psf_import=psf_import, wavelet=wavelet, mpi=mpi, fista_pqr=fista_pqr, motion_field=motion_field, **extra_flags)
+    return dispatch(
+        "pics",
+        [kspace, sensitivities],
+        output_dims,
+        c=c or None,
+        n=n or None,
+        N=N or None,
+        g=g or None,
+        e=e or None,
+        H=H or None,
+        D=D or None,
+        F=F or None,
+        J=J or None,
+        S=S or None,
+        K=K or None,
+        M=M or None,
+        r=r,
+        s=s,
+        i=i,
+        t=t,
+        p=p,
+        b=b,
+        T=T,
+        W=W,
+        d=d,
+        O=O,
+        o=o,
+        u=u,
+        C=C,
+        q=q,
+        f=f,
+        w=w,
+        L=L,
+        B=B,
+        P=P,
+        gpu_gridding=gpu_gridding or None,
+        precond=precond or None,
+        adaptive_stepsize=adaptive_stepsize or None,
+        asl=asl or None,
+        teasl=teasl or None,
+        U=U or None,
+        no_toeplitz=no_toeplitz or None,
+        fista_last=fista_last or None,
+        ist_last=ist_last or None,
+        theta=theta,
+        alpha=alpha,
+        gamma=gamma,
+        shared_img_dims=shared_img_dims,
+        psf_export=psf_export,
+        psf_import=psf_import,
+        wavelet=wavelet,
+        mpi=mpi,
+        fista_pqr=fista_pqr,
+        motion_field=motion_field,
+        **extra_flags,
+    )
+
 
 @bart_op
 def pocsense(
@@ -5093,8 +5694,19 @@ def pocsense(
     torch.Tensor
         Result array in C-order ``complex64``.
     """
-    return dispatch('pocsense', [kspace, sensitivities], output_dims,
-                    g=g or None, i=i, r=r, l=l, o=o, m=m, **extra_flags)
+    return dispatch(
+        "pocsense",
+        [kspace, sensitivities],
+        output_dims,
+        g=g or None,
+        i=i,
+        r=r,
+        l=l,
+        o=o,
+        m=m,
+        **extra_flags,
+    )
+
 
 @bart_op
 def poisson(
@@ -5164,8 +5776,26 @@ def poisson(
     torch.Tensor
         Result array in C-order ``complex64``.
     """
-    return dispatch('poisson', [], output_dims,
-                    v=v or None, e=e or None, m=m or None, Y=Y, Z=Z, y=y, z=z, C=C, V=V, D=D, T=T, R=R, s=s, **extra_flags)
+    return dispatch(
+        "poisson",
+        [],
+        output_dims,
+        v=v or None,
+        e=e or None,
+        m=m or None,
+        Y=Y,
+        Z=Z,
+        y=y,
+        z=z,
+        C=C,
+        V=V,
+        D=D,
+        T=T,
+        R=R,
+        s=s,
+        **extra_flags,
+    )
+
 
 @bart_op
 def pol2mask(
@@ -5204,8 +5834,8 @@ def pol2mask(
     torch.Tensor
         Result array in C-order ``complex64``.
     """
-    return dispatch('pol2mask', [poly], output_dims,
-                    X=X, Y=Y, **extra_flags)
+    return dispatch("pol2mask", [poly], output_dims, X=X, Y=Y, **extra_flags)
+
 
 @bart_op
 def poly(
@@ -5242,8 +5872,8 @@ def poly(
     torch.Tensor
         Result array in C-order ``complex64``.
     """
-    return dispatch('poly', [], output_dims,
-                    L=L, N=N, **extra_flags)
+    return dispatch("poly", [], output_dims, L=L, N=N, **extra_flags)
+
 
 @bart_op
 def psf(
@@ -5284,8 +5914,15 @@ def psf(
     torch.Tensor
         Result array in C-order ``complex64``.
     """
-    return dispatch('psf', [trajectory], output_dims,
-                    oversampled=oversampled or None, oversampled_decomposed=oversampled_decomposed or None, **extra_flags)
+    return dispatch(
+        "psf",
+        [trajectory],
+        output_dims,
+        oversampled=oversampled or None,
+        oversampled_decomposed=oversampled_decomposed or None,
+        **extra_flags,
+    )
+
 
 @bart_op
 def pulse(
@@ -5338,8 +5975,20 @@ def pulse(
     torch.Tensor
         Result array in C-order ``complex64``.
     """
-    return dispatch('pulse', [], output_dims,
-                    dur=dur, fa=fa, bwtp=bwtp, mb=mb, sms_dist=sms_dist, slice_th=slice_th, N=N, **extra_flags)
+    return dispatch(
+        "pulse",
+        [],
+        output_dims,
+        dur=dur,
+        fa=fa,
+        bwtp=bwtp,
+        mb=mb,
+        sms_dist=sms_dist,
+        slice_th=slice_th,
+        N=N,
+        **extra_flags,
+    )
+
 
 @bart_op
 def raga(
@@ -5401,8 +6050,22 @@ def raga(
     torch.Tensor
         Result array in C-order ``complex64``.
     """
-    return dispatch('raga', [], output_dims,
-                    no_double_base=no_double_base or None, s=s, r=r, e=e, m=m, z=z, i=i, c=c, spokes=spokes, **extra_flags)
+    return dispatch(
+        "raga",
+        [],
+        output_dims,
+        no_double_base=no_double_base or None,
+        s=s,
+        r=r,
+        e=e,
+        m=m,
+        z=z,
+        i=i,
+        c=c,
+        spokes=spokes,
+        **extra_flags,
+    )
+
 
 @bart_op
 def reconet(
@@ -5522,8 +6185,35 @@ def reconet(
     torch.Tensor
         Result array in C-order ``complex64``.
     """
-    return dispatch('reconet', [kspace, sensitivities, weights, ref_per_out], output_dims,
-                    B=B, t=t or None, e=e or None, a=a or None, g=g or None, n=n or None, rss_norm=rss_norm or None, export=export or None, load_memory=load_memory or None, lowmem=lowmem or None, test=test or None, ksp_training=ksp_training or None, no_precomp=no_precomp or None, l=l, b=b, I=I, trajectory=trajectory, pattern=pattern, adjoint=adjoint, psf=psf, mask=mask, export_graph=export_graph, **extra_flags)
+    return dispatch(
+        "reconet",
+        [kspace, sensitivities, weights, ref_per_out],
+        output_dims,
+        B=B,
+        t=t or None,
+        e=e or None,
+        a=a or None,
+        g=g or None,
+        n=n or None,
+        rss_norm=rss_norm or None,
+        export=export or None,
+        load_memory=load_memory or None,
+        lowmem=lowmem or None,
+        test=test or None,
+        ksp_training=ksp_training or None,
+        no_precomp=no_precomp or None,
+        l=l,
+        b=b,
+        I=I,
+        trajectory=trajectory,
+        pattern=pattern,
+        adjoint=adjoint,
+        psf=psf,
+        mask=mask,
+        export_graph=export_graph,
+        **extra_flags,
+    )
+
 
 @bart_op
 def repmat(
@@ -5562,8 +6252,10 @@ def repmat(
     torch.Tensor
         Result array in C-order ``complex64``.
     """
-    return dispatch('repmat', [input_], output_dims,
-                    dimension=dimension, repetitions=repetitions, **extra_flags)
+    return dispatch(
+        "repmat", [input_], output_dims, dimension=dimension, repetitions=repetitions, **extra_flags
+    )
+
 
 @bart_op
 def reshape(
@@ -5602,8 +6294,8 @@ def reshape(
     torch.Tensor
         Result array in C-order ``complex64``.
     """
-    return dispatch('reshape', [input_], output_dims,
-                    s=s, flags=flags, **extra_flags)
+    return dispatch("reshape", [input_], output_dims, s=s, flags=flags, **extra_flags)
+
 
 @bart_op
 def resize(
@@ -5637,8 +6329,8 @@ def resize(
     torch.Tensor
         Result array in C-order ``complex64``.
     """
-    return dispatch('resize', [input_], output_dims,
-                    **extra_flags)
+    return dispatch("resize", [input_], output_dims, **extra_flags)
+
 
 @bart_op
 def rmfreq(
@@ -5680,8 +6372,8 @@ def rmfreq(
     torch.Tensor
         Result array in C-order ``complex64``.
     """
-    return dispatch('rmfreq', [traj, k], output_dims,
-                    N=N, M=M, **extra_flags)
+    return dispatch("rmfreq", [traj, k], output_dims, N=N, M=M, **extra_flags)
+
 
 @bart_op
 def rof(
@@ -5720,8 +6412,8 @@ def rof(
     torch.Tensor
         Result array in C-order ``complex64``.
     """
-    return dispatch('rof', [input_], output_dims,
-                    lambda_=lambda_, flags=flags, **extra_flags)
+    return dispatch("rof", [input_], output_dims, lambda_=lambda_, flags=flags, **extra_flags)
+
 
 @bart_op
 def roistat(
@@ -5761,8 +6453,8 @@ def roistat(
     torch.Tensor
         Result array in C-order ``complex64``.
     """
-    return dispatch('roistat', [roi, input_], output_dims,
-                    b=b or None, **extra_flags)
+    return dispatch("roistat", [roi, input_], output_dims, b=b or None, **extra_flags)
+
 
 @bart_op
 def rovir(
@@ -5798,8 +6490,8 @@ def rovir(
     torch.Tensor
         Result array in C-order ``complex64``.
     """
-    return dispatch('rovir', [positive_signal, negative_negative], output_dims,
-                    **extra_flags)
+    return dispatch("rovir", [positive_signal, negative_negative], output_dims, **extra_flags)
+
 
 @bart_op
 def rss(
@@ -5835,8 +6527,8 @@ def rss(
     torch.Tensor
         Result array in C-order ``complex64``.
     """
-    return dispatch('rss', [input_], output_dims,
-                    bitmask=bitmask, **extra_flags)
+    return dispatch("rss", [input_], output_dims, bitmask=bitmask, **extra_flags)
+
 
 @bart_op
 def rtnlinv(
@@ -5943,8 +6635,35 @@ def rtnlinv(
     torch.Tensor
         Result array in C-order ``complex64``.
     """
-    return dispatch('rtnlinv', [kspace], output_dims,
-                    c=c or None, N=N or None, U=U or None, g=g or None, S=S or None, A=A or None, s=s or None, i=i, R=R, M=M, d=d, m=m, f=f, p=p, t=t, I=I, C=C, a=a, b=b, T=T, w=w, x=x, **extra_flags)
+    return dispatch(
+        "rtnlinv",
+        [kspace],
+        output_dims,
+        c=c or None,
+        N=N or None,
+        U=U or None,
+        g=g or None,
+        S=S or None,
+        A=A or None,
+        s=s or None,
+        i=i,
+        R=R,
+        M=M,
+        d=d,
+        m=m,
+        f=f,
+        p=p,
+        t=t,
+        I=I,
+        C=C,
+        a=a,
+        b=b,
+        T=T,
+        w=w,
+        x=x,
+        **extra_flags,
+    )
+
 
 @bart_op
 def sake(
@@ -5987,8 +6706,8 @@ def sake(
     torch.Tensor
         Result array in C-order ``complex64``.
     """
-    return dispatch('sake', [kspace], output_dims,
-                    i=i, s=s, o=o, **extra_flags)
+    return dispatch("sake", [kspace], output_dims, i=i, s=s, o=o, **extra_flags)
+
 
 @bart_op
 def sample(
@@ -6064,8 +6783,25 @@ def sample(
     torch.Tensor
         Result array in C-order ``complex64``.
     """
-    return dispatch('sample', [samples], output_dims,
-                    g=g or None, s=s, N=N, K=K, S=S, r=r or None, a=a or None, p=p or None, external_graph=external_graph, mask=mask, gamma=gamma, save_mod=save_mod, **extra_flags)
+    return dispatch(
+        "sample",
+        [samples],
+        output_dims,
+        g=g or None,
+        s=s,
+        N=N,
+        K=K,
+        S=S,
+        r=r or None,
+        a=a or None,
+        p=p or None,
+        external_graph=external_graph,
+        mask=mask,
+        gamma=gamma,
+        save_mod=save_mod,
+        **extra_flags,
+    )
+
 
 @bart_op
 def saxpy(
@@ -6104,8 +6840,8 @@ def saxpy(
     torch.Tensor
         Result array in C-order ``complex64``.
     """
-    return dispatch('saxpy', [scale, input1, input2], output_dims,
-                    **extra_flags)
+    return dispatch("saxpy", [scale, input1, input2], output_dims, **extra_flags)
+
 
 @bart_op
 def scale(
@@ -6141,8 +6877,8 @@ def scale(
     torch.Tensor
         Result array in C-order ``complex64``.
     """
-    return dispatch('scale', [factor, input_], output_dims,
-                    **extra_flags)
+    return dispatch("scale", [factor, input_], output_dims, **extra_flags)
+
 
 @bart_op
 def sdot(
@@ -6178,8 +6914,8 @@ def sdot(
     torch.Tensor
         Result array in C-order ``complex64``.
     """
-    return dispatch('sdot', [input1, input2], output_dims,
-                    **extra_flags)
+    return dispatch("sdot", [input1, input2], output_dims, **extra_flags)
+
 
 @bart_op
 def seq(
@@ -6318,8 +7054,44 @@ def seq(
     torch.Tensor
         Result array in C-order ``complex64``.
     """
-    return dispatch('seq', [], output_dims,
-                    d=d, N=N, R=R, chrono=chrono or None, dist=dist, FOV=FOV, BR=BR, slice_thickness=slice_thickness, FA=FA, TR=TR, TE=TE, TE_delta=TE_delta, BWTP=BWTP, rf_duration=rf_duration, dwell=dwell, os=os, pe_mode=pe_mode, raga_flags=raga_flags, tiny=tiny, e=e, r=r, z=z, t=t, f=f, m=m, i=i, mb_factor=mb_factor, sms_distance=sms_distance, TI=TI, init_delay=init_delay, inv_delay=inv_delay, **extra_flags)
+    return dispatch(
+        "seq",
+        [],
+        output_dims,
+        d=d,
+        N=N,
+        R=R,
+        chrono=chrono or None,
+        dist=dist,
+        FOV=FOV,
+        BR=BR,
+        slice_thickness=slice_thickness,
+        FA=FA,
+        TR=TR,
+        TE=TE,
+        TE_delta=TE_delta,
+        BWTP=BWTP,
+        rf_duration=rf_duration,
+        dwell=dwell,
+        os=os,
+        pe_mode=pe_mode,
+        raga_flags=raga_flags,
+        tiny=tiny,
+        e=e,
+        r=r,
+        z=z,
+        t=t,
+        f=f,
+        m=m,
+        i=i,
+        mb_factor=mb_factor,
+        sms_distance=sms_distance,
+        TI=TI,
+        init_delay=init_delay,
+        inv_delay=inv_delay,
+        **extra_flags,
+    )
+
 
 @bart_op
 def show(
@@ -6371,8 +7143,19 @@ def show(
     torch.Tensor
         Result array in C-order ``complex64``.
     """
-    return dispatch('show', [input_], output_dims,
-                    m=m or None, R=R or None, N=N or None, d=d, s=s, f=f, **extra_flags)
+    return dispatch(
+        "show",
+        [input_],
+        output_dims,
+        m=m or None,
+        R=R or None,
+        N=N or None,
+        d=d,
+        s=s,
+        f=f,
+        **extra_flags,
+    )
+
 
 @bart_op
 def signal(
@@ -6495,8 +7278,39 @@ def signal(
     torch.Tensor
         Result array in C-order ``complex64``.
     """
-    return dispatch('signal', [], output_dims,
-                    I=I or None, s=s or None, flag_0=flag_0, flag_1=flag_1, flag_2=flag_2, flag_3=flag_3, flag_4=flag_4, flag_5=flag_5, flag_6=flag_6, r=r, e=e, i=i, f=f, d=d, t=t, n=n, b=b, m=m, l=l, a=a, fat=fat or None, short_TR_LL_approx=short_TR_LL_approx or None, pulsed=pulsed or None, acquisition_only=acquisition_only or None, av_spokes=av_spokes, freq_samples=freq_samples, **extra_flags)
+    return dispatch(
+        "signal",
+        [],
+        output_dims,
+        I=I or None,
+        s=s or None,
+        flag_0=flag_0,
+        flag_1=flag_1,
+        flag_2=flag_2,
+        flag_3=flag_3,
+        flag_4=flag_4,
+        flag_5=flag_5,
+        flag_6=flag_6,
+        r=r,
+        e=e,
+        i=i,
+        f=f,
+        d=d,
+        t=t,
+        n=n,
+        b=b,
+        m=m,
+        l=l,
+        a=a,
+        fat=fat or None,
+        short_TR_LL_approx=short_TR_LL_approx or None,
+        pulsed=pulsed or None,
+        acquisition_only=acquisition_only or None,
+        av_spokes=av_spokes,
+        freq_samples=freq_samples,
+        **extra_flags,
+    )
+
 
 @bart_op
 def sim(
@@ -6536,8 +7350,16 @@ def sim(
     torch.Tensor
         Result array in C-order ``complex64``.
     """
-    return dispatch('sim', [], output_dims,
-                    split_dim=split_dim or None, flag_1=flag_1, flag_2=flag_2, **extra_flags)
+    return dispatch(
+        "sim",
+        [],
+        output_dims,
+        split_dim=split_dim or None,
+        flag_1=flag_1,
+        flag_2=flag_2,
+        **extra_flags,
+    )
+
 
 @bart_op
 def slice(
@@ -6570,8 +7392,8 @@ def slice(
     torch.Tensor
         Result array in C-order ``complex64``.
     """
-    return dispatch('slice', [input_], output_dims,
-                    **extra_flags)
+    return dispatch("slice", [input_], output_dims, **extra_flags)
+
 
 @bart_op
 def spow(
@@ -6608,8 +7430,8 @@ def spow(
     torch.Tensor
         Result array in C-order ``complex64``.
     """
-    return dispatch('spow', [exponent, input_], output_dims,
-                    **extra_flags)
+    return dispatch("spow", [exponent, input_], output_dims, **extra_flags)
+
 
 @bart_op
 def sqpics(
@@ -6705,8 +7527,32 @@ def sqpics(
     torch.Tensor
         Result array in C-order ``complex64``.
     """
-    return dispatch('sqpics', [kspace, sensitivities], output_dims,
-                    n=n or None, g=g or None, e=e or None, H=H or None, F=F or None, S=S or None, r=r, s=s, i=i, t=t, p=p, b=b, T=T, W=W, d=d, u=u, C=C, f=f, w=w, **extra_flags)
+    return dispatch(
+        "sqpics",
+        [kspace, sensitivities],
+        output_dims,
+        n=n or None,
+        g=g or None,
+        e=e or None,
+        H=H or None,
+        F=F or None,
+        S=S or None,
+        r=r,
+        s=s,
+        i=i,
+        t=t,
+        p=p,
+        b=b,
+        T=T,
+        W=W,
+        d=d,
+        u=u,
+        C=C,
+        f=f,
+        w=w,
+        **extra_flags,
+    )
+
 
 @bart_op
 def squeeze(
@@ -6739,8 +7585,8 @@ def squeeze(
     torch.Tensor
         Result array in C-order ``complex64``.
     """
-    return dispatch('squeeze', [input_], output_dims,
-                    **extra_flags)
+    return dispatch("squeeze", [input_], output_dims, **extra_flags)
+
 
 @bart_op
 def ssa(
@@ -6794,8 +7640,8 @@ def ssa(
     torch.Tensor
         Result array in C-order ``complex64``.
     """
-    return dispatch('ssa', [src], output_dims,
-                    z=z or None, w=w, m=m, n=n, r=r, g=g, **extra_flags)
+    return dispatch("ssa", [src], output_dims, z=z or None, w=w, m=m, n=n, r=r, g=g, **extra_flags)
+
 
 @bart_op
 def std(
@@ -6832,8 +7678,8 @@ def std(
     torch.Tensor
         Result array in C-order ``complex64``.
     """
-    return dispatch('std', [input_], output_dims,
-                    bitmask=bitmask, **extra_flags)
+    return dispatch("std", [input_], output_dims, bitmask=bitmask, **extra_flags)
+
 
 @bart_op
 def stl(
@@ -6885,8 +7731,19 @@ def stl(
     torch.Tensor
         Result array in C-order ``complex64``.
     """
-    return dispatch('stl', [], output_dims,
-                    s=s, m=m, stat=stat or None, binary=binary or None, no_nc=no_nc or None, input_=input_, **extra_flags)
+    return dispatch(
+        "stl",
+        [],
+        output_dims,
+        s=s,
+        m=m,
+        stat=stat or None,
+        binary=binary or None,
+        no_nc=no_nc or None,
+        input_=input_,
+        **extra_flags,
+    )
+
 
 @bart_op
 def svd(
@@ -6922,8 +7779,8 @@ def svd(
     torch.Tensor
         Result array in C-order ``complex64``.
     """
-    return dispatch('svd', [input_], output_dims,
-                    e=e or None, **extra_flags)
+    return dispatch("svd", [input_], output_dims, e=e or None, **extra_flags)
+
 
 @bart_op
 def tee(
@@ -6953,8 +7810,8 @@ def tee(
     torch.Tensor
         Result array in C-order ``complex64``.
     """
-    return dispatch('tee', [], output_dims,
-                    **extra_flags)
+    return dispatch("tee", [], output_dims, **extra_flags)
+
 
 @bart_op
 def tensorflow(
@@ -6996,8 +7853,17 @@ def tensorflow(
     torch.Tensor
         Result array in C-order ``complex64``.
     """
-    return dispatch('tensorflow', [], output_dims,
-                    n=n or None, g=g or None, b=b, TensorFlow_Graph=TensorFlow_Graph, **extra_flags)
+    return dispatch(
+        "tensorflow",
+        [],
+        output_dims,
+        n=n or None,
+        g=g or None,
+        b=b,
+        TensorFlow_Graph=TensorFlow_Graph,
+        **extra_flags,
+    )
+
 
 @bart_op
 def tgv(
@@ -7040,8 +7906,10 @@ def tgv(
     torch.Tensor
         Result array in C-order ``complex64``.
     """
-    return dispatch('tgv', [input_], output_dims,
-                    alpha=alpha, lambda_=lambda_, flags=flags, **extra_flags)
+    return dispatch(
+        "tgv", [input_], output_dims, alpha=alpha, lambda_=lambda_, flags=flags, **extra_flags
+    )
+
 
 @bart_op
 def threshold(
@@ -7084,8 +7952,8 @@ def threshold(
     torch.Tensor
         Result array in C-order ``complex64``.
     """
-    return dispatch('threshold', [input_], output_dims,
-                    j=j, b=b, lambda_=lambda_, **extra_flags)
+    return dispatch("threshold", [input_], output_dims, j=j, b=b, lambda_=lambda_, **extra_flags)
+
 
 @bart_op
 def toimg(
@@ -7141,8 +8009,20 @@ def toimg(
     torch.Tensor
         Result array in C-order ``complex64``.
     """
-    return dispatch('toimg', [input_], output_dims,
-                    d=d or None, m=m or None, W=W or None, D=D or None, g=g, c=c, w=w, **extra_flags)
+    return dispatch(
+        "toimg",
+        [input_],
+        output_dims,
+        d=d or None,
+        m=m or None,
+        W=W or None,
+        D=D or None,
+        g=g,
+        c=c,
+        w=w,
+        **extra_flags,
+    )
+
 
 @bart_op
 def toraw(
@@ -7185,8 +8065,8 @@ def toraw(
     torch.Tensor
         Result array in C-order ``complex64``.
     """
-    return dispatch('toraw', [input_], output_dims,
-                    n=n or None, c=c or None, b=b, **extra_flags)
+    return dispatch("toraw", [input_], output_dims, n=n or None, c=c or None, b=b, **extra_flags)
+
 
 @bart_op
 def traj(
@@ -7315,8 +8195,43 @@ def traj(
     torch.Tensor
         Result array in C-order ``complex64``.
     """
-    return dispatch('traj', [], output_dims,
-                    l=l or None, g=g or None, r=r or None, G=G or None, H=H or None, A=A or None, D=D or None, O=O or None, flag_3=flag_3 or None, c=c or None, E=E or None, x=x, y=y, z=z, d=d, e=e, a=a, t=t, m=m, s=s, o=o, R=R, q=q, Q=Q, C=C, V=V, double_base=double_base or None, mems_legacy=mems_legacy or None, z_us=z_us, raga_inc=raga_inc, **extra_flags)
+    return dispatch(
+        "traj",
+        [],
+        output_dims,
+        l=l or None,
+        g=g or None,
+        r=r or None,
+        G=G or None,
+        H=H or None,
+        A=A or None,
+        D=D or None,
+        O=O or None,
+        flag_3=flag_3 or None,
+        c=c or None,
+        E=E or None,
+        x=x,
+        y=y,
+        z=z,
+        d=d,
+        e=e,
+        a=a,
+        t=t,
+        m=m,
+        s=s,
+        o=o,
+        R=R,
+        q=q,
+        Q=Q,
+        C=C,
+        V=V,
+        double_base=double_base or None,
+        mems_legacy=mems_legacy or None,
+        z_us=z_us,
+        raga_inc=raga_inc,
+        **extra_flags,
+    )
+
 
 @bart_op
 def trajcor(
@@ -7359,8 +8274,8 @@ def trajcor(
     torch.Tensor
         Result array in C-order ``complex64``.
     """
-    return dispatch('trajcor', [traj], output_dims,
-                    O=O or None, q=q, V=V, **extra_flags)
+    return dispatch("trajcor", [traj], output_dims, O=O or None, q=q, V=V, **extra_flags)
+
 
 @bart_op
 def transpose(
@@ -7399,8 +8314,8 @@ def transpose(
     torch.Tensor
         Result array in C-order ``complex64``.
     """
-    return dispatch('transpose', [input_], output_dims,
-                    dim1=dim1, dim2=dim2, **extra_flags)
+    return dispatch("transpose", [input_], output_dims, dim1=dim1, dim2=dim2, **extra_flags)
+
 
 @bart_op
 def twixread(
@@ -7433,8 +8348,8 @@ def twixread(
     torch.Tensor
         Result array in C-order ``complex64``.
     """
-    return dispatch('twixread', [dat_file], output_dims,
-                    **extra_flags)
+    return dispatch("twixread", [dat_file], output_dims, **extra_flags)
+
 
 @bart_op
 def unwrap(
@@ -7473,8 +8388,8 @@ def unwrap(
     torch.Tensor
         Result array in C-order ``complex64``.
     """
-    return dispatch('unwrap', [input_], output_dims,
-                    b=b, dim=dim, **extra_flags)
+    return dispatch("unwrap", [input_], output_dims, b=b, dim=dim, **extra_flags)
+
 
 @bart_op
 def upat(
@@ -7519,8 +8434,8 @@ def upat(
     torch.Tensor
         Result array in C-order ``complex64``.
     """
-    return dispatch('upat', [], output_dims,
-                    Y=Y, Z=Z, y=y, z=z, c=c, **extra_flags)
+    return dispatch("upat", [], output_dims, Y=Y, Z=Z, y=y, z=z, c=c, **extra_flags)
+
 
 @bart_op
 def var(
@@ -7556,8 +8471,8 @@ def var(
     torch.Tensor
         Result array in C-order ``complex64``.
     """
-    return dispatch('var', [input_], output_dims,
-                    bitmask=bitmask, **extra_flags)
+    return dispatch("var", [input_], output_dims, bitmask=bitmask, **extra_flags)
+
 
 @bart_op
 def vec(
@@ -7587,8 +8502,8 @@ def vec(
     torch.Tensor
         Result array in C-order ``complex64``.
     """
-    return dispatch('vec', [], output_dims,
-                    **extra_flags)
+    return dispatch("vec", [], output_dims, **extra_flags)
+
 
 @bart_op
 def walsh(
@@ -7634,8 +8549,8 @@ def walsh(
     torch.Tensor
         Result array in C-order ``complex64``.
     """
-    return dispatch('walsh', [input_], output_dims,
-                    r=r, R=R, b=b, B=B, **extra_flags)
+    return dispatch("walsh", [input_], output_dims, r=r, R=R, b=b, B=B, **extra_flags)
+
 
 @bart_op
 def wave(
@@ -7723,8 +8638,26 @@ def wave(
     torch.Tensor
         Result array in C-order ``complex64``.
     """
-    return dispatch('wave', [maps, wave, kspace], output_dims,
-                    g=g or None, f=f or None, H=H or None, v=v or None, w=w or None, l=l or None, r=r, b=b, i=i, s=s, c=c, t=t, e=e, **extra_flags)
+    return dispatch(
+        "wave",
+        [maps, wave, kspace],
+        output_dims,
+        g=g or None,
+        f=f or None,
+        H=H or None,
+        v=v or None,
+        w=w or None,
+        l=l or None,
+        r=r,
+        b=b,
+        i=i,
+        s=s,
+        c=c,
+        t=t,
+        e=e,
+        **extra_flags,
+    )
+
 
 @bart_op
 def wavelet(
@@ -7763,8 +8696,8 @@ def wavelet(
     torch.Tensor
         Result array in C-order ``complex64``.
     """
-    return dispatch('wavelet', [input_], output_dims,
-                    a=a or None, bitmask=bitmask, **extra_flags)
+    return dispatch("wavelet", [input_], output_dims, a=a or None, bitmask=bitmask, **extra_flags)
+
 
 @bart_op
 def wavepsf(
@@ -7827,8 +8760,22 @@ def wavepsf(
     torch.Tensor
         Result array in C-order ``complex64``.
     """
-    return dispatch('wavepsf', [], output_dims,
-                    c=c or None, x=x, y=y, r=r, a=a, t=t, g=g, s=s, n=n, **extra_flags)
+    return dispatch(
+        "wavepsf",
+        [],
+        output_dims,
+        c=c or None,
+        x=x,
+        y=y,
+        r=r,
+        a=a,
+        t=t,
+        g=g,
+        s=s,
+        n=n,
+        **extra_flags,
+    )
+
 
 @bart_op
 def whiten(
@@ -7876,8 +8823,8 @@ def whiten(
     torch.Tensor
         Result array in C-order ``complex64``.
     """
-    return dispatch('whiten', [input_, ndata], output_dims,
-                    n=n or None, o=o, c=c, **extra_flags)
+    return dispatch("whiten", [input_, ndata], output_dims, n=n or None, o=o, c=c, **extra_flags)
+
 
 @bart_op
 def window(
@@ -7916,8 +8863,8 @@ def window(
     torch.Tensor
         Result array in C-order ``complex64``.
     """
-    return dispatch('window', [input_], output_dims,
-                    H=H or None, flags=flags, **extra_flags)
+    return dispatch("window", [input_], output_dims, H=H or None, flags=flags, **extra_flags)
+
 
 @bart_op
 def wshfl(
@@ -8007,8 +8954,25 @@ def wshfl(
     torch.Tensor
         Result array in C-order ``complex64``.
     """
-    return dispatch('wshfl', [maps, wave, phi, reorder, table], output_dims,
-                    g=g or None, K=K or None, H=H or None, v=v or None, b=b, i=i, j=j, s=s, e=e, F=F, O=O, t=t, **extra_flags)
+    return dispatch(
+        "wshfl",
+        [maps, wave, phi, reorder, table],
+        output_dims,
+        g=g or None,
+        K=K or None,
+        H=H or None,
+        v=v or None,
+        b=b,
+        i=i,
+        j=j,
+        s=s,
+        e=e,
+        F=F,
+        O=O,
+        t=t,
+        **extra_flags,
+    )
+
 
 @bart_op
 def zeros(
@@ -8041,8 +9005,8 @@ def zeros(
     torch.Tensor
         Result array in C-order ``complex64``.
     """
-    return dispatch('zeros', [], output_dims,
-                    dims=dims, **extra_flags)
+    return dispatch("zeros", [], output_dims, dims=dims, **extra_flags)
+
 
 @bart_op
 def zexp(
@@ -8078,151 +9042,151 @@ def zexp(
     torch.Tensor
         Result array in C-order ``complex64``.
     """
-    return dispatch('zexp', [input_], output_dims,
-                    i=i or None, **extra_flags)
+    return dispatch("zexp", [input_], output_dims, i=i or None, **extra_flags)
+
 
 __all__ = [
-    'affinereg',
-    'avg',
-    'bin',
-    'bitmask',
-    'bloch',
-    'cabs',
-    'calc',
-    'caldir',
-    'calmat',
-    'carg',
-    'casorati',
-    'cc',
-    'ccapply',
-    'cdf97',
-    'circshift',
-    'coils',
-    'compress',
-    'conj',
-    'conv',
-    'conway',
-    'copy',
-    'cpyphs',
-    'creal',
-    'crop',
-    'cunet',
-    'delta',
-    'denoise',
-    'ecalib',
-    'ecaltwo',
-    'epg',
-    'estdelay',
-    'estdims',
-    'estmotion',
-    'estscaling',
-    'estshift',
-    'estvar',
-    'extract',
-    'fakeksp',
-    'fft',
-    'fftmod',
-    'fftrot',
-    'fftshift',
-    'filter',
-    'flatten',
-    'flip',
-    'fmac',
-    'fovshift',
-    'gmm',
-    'grid',
-    'grog',
-    'hist',
-    'homodyne',
-    'ictv',
-    'index',
-    'interpolate',
-    'invert',
-    'ismrmrd',
-    'itsense',
-    'join',
-    'looklocker',
-    'lrmatrix',
-    'mandelbrot',
-    'measure',
-    'mip',
-    'mnist',
-    'moba',
-    'mobafit',
-    'mobasig',
-    'morphop',
-    'multicfl',
-    'ncalib',
-    'nlinv',
-    'nlinvnet',
-    'nlmeans',
-    'nnet',
-    'noise',
-    'normalize',
-    'nrmse',
-    'nufft',
-    'nufftbase',
-    'onehotenc',
-    'ones',
-    'pattern',
-    'phantom',
-    'phasepole',
-    'pics',
-    'pocsense',
-    'poisson',
-    'pol2mask',
-    'poly',
-    'psf',
-    'pulse',
-    'raga',
-    'reconet',
-    'repmat',
-    'reshape',
-    'resize',
-    'rmfreq',
-    'rof',
-    'roistat',
-    'rovir',
-    'rss',
-    'rtnlinv',
-    'sake',
-    'sample',
-    'saxpy',
-    'scale',
-    'sdot',
-    'seq',
-    'show',
-    'signal',
-    'sim',
-    'slice',
-    'spow',
-    'sqpics',
-    'squeeze',
-    'ssa',
-    'std',
-    'stl',
-    'svd',
-    'tee',
-    'tensorflow',
-    'tgv',
-    'threshold',
-    'toimg',
-    'toraw',
-    'traj',
-    'trajcor',
-    'transpose',
-    'twixread',
-    'unwrap',
-    'upat',
-    'var',
-    'vec',
-    'walsh',
-    'wave',
-    'wavelet',
-    'wavepsf',
-    'whiten',
-    'window',
-    'wshfl',
-    'zeros',
-    'zexp',
+    "affinereg",
+    "avg",
+    "bin",
+    "bitmask",
+    "bloch",
+    "cabs",
+    "calc",
+    "caldir",
+    "calmat",
+    "carg",
+    "casorati",
+    "cc",
+    "ccapply",
+    "cdf97",
+    "circshift",
+    "coils",
+    "compress",
+    "conj",
+    "conv",
+    "conway",
+    "copy",
+    "cpyphs",
+    "creal",
+    "crop",
+    "cunet",
+    "delta",
+    "denoise",
+    "ecalib",
+    "ecaltwo",
+    "epg",
+    "estdelay",
+    "estdims",
+    "estmotion",
+    "estscaling",
+    "estshift",
+    "estvar",
+    "extract",
+    "fakeksp",
+    "fft",
+    "fftmod",
+    "fftrot",
+    "fftshift",
+    "filter",
+    "flatten",
+    "flip",
+    "fmac",
+    "fovshift",
+    "gmm",
+    "grid",
+    "grog",
+    "hist",
+    "homodyne",
+    "ictv",
+    "index",
+    "interpolate",
+    "invert",
+    "ismrmrd",
+    "itsense",
+    "join",
+    "looklocker",
+    "lrmatrix",
+    "mandelbrot",
+    "measure",
+    "mip",
+    "mnist",
+    "moba",
+    "mobafit",
+    "mobasig",
+    "morphop",
+    "multicfl",
+    "ncalib",
+    "nlinv",
+    "nlinvnet",
+    "nlmeans",
+    "nnet",
+    "noise",
+    "normalize",
+    "nrmse",
+    "nufft",
+    "nufftbase",
+    "onehotenc",
+    "ones",
+    "pattern",
+    "phantom",
+    "phasepole",
+    "pics",
+    "pocsense",
+    "poisson",
+    "pol2mask",
+    "poly",
+    "psf",
+    "pulse",
+    "raga",
+    "reconet",
+    "repmat",
+    "reshape",
+    "resize",
+    "rmfreq",
+    "rof",
+    "roistat",
+    "rovir",
+    "rss",
+    "rtnlinv",
+    "sake",
+    "sample",
+    "saxpy",
+    "scale",
+    "sdot",
+    "seq",
+    "show",
+    "signal",
+    "sim",
+    "slice",
+    "spow",
+    "sqpics",
+    "squeeze",
+    "ssa",
+    "std",
+    "stl",
+    "svd",
+    "tee",
+    "tensorflow",
+    "tgv",
+    "threshold",
+    "toimg",
+    "toraw",
+    "traj",
+    "trajcor",
+    "transpose",
+    "twixread",
+    "unwrap",
+    "upat",
+    "var",
+    "vec",
+    "walsh",
+    "wave",
+    "wavelet",
+    "wavepsf",
+    "whiten",
+    "window",
+    "wshfl",
+    "zeros",
+    "zexp",
 ]

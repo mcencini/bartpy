@@ -12,4 +12,3 @@ and rendered here by `nbsphinx <https://nbsphinx.readthedocs.io>`_.
 
    01_high_level_tools
    02_library_internals
-   phantom_demo

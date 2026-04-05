@@ -10,7 +10,7 @@ repos:
       - id: codespell
         args:
           - --skip=attic/,.git/,bart/,*.ipynb,pyproject.toml
-          - --ignore-words-list=ist
+          - --ignore-words-list=ist,te,reconet,pyramide
 
   - repo: https://github.com/astral-sh/ruff-pre-commit
     rev: v0.4.4

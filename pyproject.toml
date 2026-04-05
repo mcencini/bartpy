@@ -40,6 +40,10 @@ docs = [
     "sphinx-book-theme",
     "nbsphinx",
     "sphinx-copybutton",
+    "nbconvert",
+    "ipykernel",
+    "matplotlib",
+    "nbstripout",
 ]
 
 # ---------------------------------------------------------------------------
@@ -53,10 +57,11 @@ docs = [
 #   CMAKE_ARGS="-DUSE_CUDA=ON" pip install .  # CUDA
 #   BARTORCH_SKIP_EXT=1 pip install .         # pure-Python / subprocess only
 [tool.scikit-build]
-cmake.source-dir = "bartorch/csrc"
+cmake.source-dir = "src/bartorch/csrc"
 cmake.build-type = "Release"
-# Wheel build: only include the bartorch Python package + the compiled extension.
-wheel.packages = ["bartorch"]
+# Wheel build: the package lives under src/ (modern src layout).
+# scikit-build-core strips the "src/" prefix when installing into the wheel.
+wheel.packages = ["src/bartorch"]
 # Install the compiled extension into the bartorch package directory inside the wheel.
 wheel.install-dir = "bartorch"
 
@@ -69,7 +74,7 @@ BARTORCH_SKIP_EXT = {env = "BARTORCH_SKIP_EXT", default = "OFF"}
 USE_CUDA = {env = "BARTORCH_USE_CUDA", default = "OFF"}
 
 [tool.setuptools.packages.find]
-where = ["."]
+where = ["src"]
 include = ["bartorch*"]
 
 [tool.black]
@@ -86,7 +91,7 @@ select = ["E", "F", "W", "I"]
 "tests/*" = ["F401"]
 # Auto-generated file: BART uses single-letter flags (E741) and long dispatch
 # lines (E501) that are inherent to wrapping the BART CLI API.
-"bartorch/tools/_generated.py" = ["E501", "E741"]
+"src/bartorch/tools/_generated.py" = ["E501", "E741"]
 
 [tool.mypy]
 python_version = "3.9"

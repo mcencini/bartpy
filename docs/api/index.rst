@@ -32,11 +32,6 @@ Tools
    :undoc-members:
    :show-inheritance:
 
-.. automodule:: bartorch.tools._dispatch
-   :members:
-   :undoc-members:
-   :show-inheritance:
-
 Ops
 ---
 

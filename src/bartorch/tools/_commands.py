@@ -413,7 +413,8 @@ def pics(
     fast_est: bool = False,
     **extra_flags: Any,
 ) -> torch.Tensor:
-    """Parallel Imaging Compressed Sensing (PICS) reconstruction.
+    (
+        """Parallel Imaging Compressed Sensing (PICS) reconstruction.
 
     Iteratively reconstructs an image from under-sampled k-space data using
     sensitivity encoding and compressed-sensing regularisation.
@@ -439,7 +440,9 @@ def pics(
     R : str or list of str, optional
         BART regularisation specification(s) (``-R``).
 
-""" + _R_GUIDE + """
+"""
+        + _R_GUIDE
+        + """
     Solver
     ------
     iter_ : int, optional
@@ -497,6 +500,7 @@ def pics(
 
     >>> reco = bt.pics(kspace, sens, R="T:7:0:0.01", admm_rho=0.01)
     """
+    )
     return _generated.pics(
         kspace,
         sens,

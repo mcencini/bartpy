@@ -154,8 +154,7 @@ def bart_op(func=None, *, real_output: bool = False, cpu_only: bool = True):
                         break
                 if cuda_device is not None:
                     new_args = tuple(
-                        a.cpu() if isinstance(a, torch.Tensor) else a
-                        for a in new_args
+                        a.cpu() if isinstance(a, torch.Tensor) else a for a in new_args
                     )
                     new_kwargs = {
                         k: v.cpu() if isinstance(v, torch.Tensor) else v
@@ -170,13 +169,11 @@ def bart_op(func=None, *, real_output: bool = False, cpu_only: bool = True):
                     result = result.to(cuda_device)
                 elif isinstance(result, tuple):
                     result = tuple(
-                        r.to(cuda_device) if isinstance(r, torch.Tensor) else r
-                        for r in result
+                        r.to(cuda_device) if isinstance(r, torch.Tensor) else r for r in result
                     )
                 elif isinstance(result, list):
                     result = [
-                        r.to(cuda_device) if isinstance(r, torch.Tensor) else r
-                        for r in result
+                        r.to(cuda_device) if isinstance(r, torch.Tensor) else r for r in result
                     ]
 
             if real_output and isinstance(result, torch.Tensor):

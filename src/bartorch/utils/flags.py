@@ -88,8 +88,7 @@ def axes_to_flags(
         a = orig + ndim if orig < 0 else orig
         if a < 0 or a >= ndim:
             raise ValueError(
-                f"axis {orig} out of range for ndim={ndim} "
-                f"(valid range: [{-ndim}, {ndim - 1}])"
+                f"axis {orig} out of range for ndim={ndim} (valid range: [{-ndim}, {ndim - 1}])"
             )
         normalised.append(a)
 

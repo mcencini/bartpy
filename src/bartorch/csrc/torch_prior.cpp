@@ -253,8 +253,8 @@ extern "C" const struct nlop_s* __real_nlop_tf_create(const char* path);
 
 extern "C" const struct nlop_s* __wrap_nlop_tf_create(const char* path)
 {
-    static constexpr char     kPrefix[]  = "bartorch://";
-    static constexpr ptrdiff_t kPrefixLen = sizeof(kPrefix) - 1;
+    static constexpr char       kPrefix[]  = "bartorch://";
+    static constexpr std::size_t kPrefixLen = sizeof(kPrefix) - 1;
 
     if (strncmp(path, kPrefix, (size_t)kPrefixLen) == 0) {
         const std::string name(path + kPrefixLen);

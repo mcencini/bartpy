@@ -418,7 +418,7 @@ if(BARTORCH_USE_FINUFFT)
     target_link_libraries(_bartorch_ext PRIVATE finufft)
     target_compile_definitions(_bartorch_ext PRIVATE BARTORCH_USE_FINUFFT)
 
-    # Redirect grid2/grid2H and rolloff_correction* to finufft_grid.cpp impls.
+    # Redirect grid2/grid2H and rolloff_correction* to finufft_grid.cpp implementations.
     if(APPLE)
         target_link_options(_bartorch_ext PRIVATE
             -Wl,-wrap,_grid2

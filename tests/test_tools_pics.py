@@ -102,9 +102,10 @@ class TestBartImgDimsFromKspace:
         nc, nz, ny, nx = 6, 10, 20, 30
         ksp = torch.zeros(nc, nz, ny, nx, dtype=torch.complex64)
         dims = _bart_img_dims_from_kspace(ksp)
-        # Before zeroing, ksp_dims[3] == nc (6). After zeroing, it must be 1.
+        # Before zeroing, ksp_dims[3] == nc (6). After zeroing it must be 1.
         assert dims[_COIL_DIM] == 1
-        assert nc not in dims[_COIL_DIM:_COIL_DIM + 1]
+        # The original nc value must not appear at the coil position.
+        assert dims[_COIL_DIM] != nc
 
 
 # ---------------------------------------------------------------------------
@@ -176,8 +177,7 @@ class TestPicsTorchPriorValidation:
             call_args.update(kwargs)
             raise RuntimeError("sentinel")
 
-        original_generated_pics = _generated_pics = cmds._generated.pics
-
+        original_generated_pics = cmds._generated.pics
         try:
             graph_mod._get_ext = lambda: FakeExt()
             cmds._generated.pics = fake_generated_pics

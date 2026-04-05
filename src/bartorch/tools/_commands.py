@@ -596,7 +596,10 @@ def pics(
         # BART img_dims (Fortran order, 16 elements) for the nlop domain.
         bart_img_dims = _bart_img_dims_from_kspace(kspace)
 
-        # Build the BART TF-reg string: TF:{bartorch://name}:lambda
+        # Build the BART TF-reg string.  The double braces {{ }} produce
+        # literal { } in the f-string output, giving:
+        #   TF:{bartorch://<name>}:<lambda>
+        # which matches BART's sscanf format: "%*[^:]:{%m[^}]}:%f"
         tf_reg = f"TF:{{bartorch://{name}}}:{torch_prior_lambda}"
 
         # Merge with any user-supplied R flags.

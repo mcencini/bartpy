@@ -2,12 +2,17 @@
 
 The auto-generated layer in :mod:`bartorch.tools._generated` provides thin
 wrappers for every BART command.  This module imports that full suite and then
-re-defines a small set of commands that benefit from a richer Python API:
+re-defines a small set of commands that benefit from a richer Python API.
+The overrides delegate to their auto-generated counterparts — they are purely
+Pythonic argument-translation layers, not independent ``dispatch()`` callers.
 
-* :func:`ecalib` — maps Pythonic keyword names to BART flags
-* :func:`caldir` — maps ``calib_size`` to the positional BART argument
-* :func:`pics`   — ``R`` accepts ``list[str]`` for multiple regularisers,
-  with comprehensive documentation of the regularisation syntax
+* :func:`ecalib` — maps Pythonic keyword names (``calib_size``, ``maps``, …)
+  to raw BART flags, then calls the generated :func:`_generated.ecalib`
+* :func:`caldir` — maps ``calib_size`` to the BART ``-r`` flag, then calls
+  the generated :func:`_generated.caldir`
+* :func:`pics`   — ``R`` accepts ``list[str]`` for multiple regularisers;
+  translates Pythonic kwargs to BART flags and calls the generated
+  :func:`_generated.pics`
 
 All other commands are re-exported unchanged via ``from _generated import *``.
 The ``__init__.py`` imports from this module to build the public API.
@@ -19,10 +24,14 @@ from typing import Any
 
 import torch
 
-from bartorch.core.graph import dispatch
-from bartorch.core.tensor import bart_op
 from bartorch.tools._generated import *  # noqa: F401,F403
 from bartorch.tools._generated import __all__ as _generated_all
+
+# Private aliases so the override functions below can call the generated
+# versions without triggering Python's name-shadowing rules.
+from bartorch.tools._generated import caldir as _caldir_gen
+from bartorch.tools._generated import ecalib as _ecalib_gen
+from bartorch.tools._generated import pics as _pics_gen
 
 __all__ = [
     *_generated_all,
@@ -38,7 +47,6 @@ __all__ = [
 # ---------------------------------------------------------------------------
 
 
-@bart_op
 def ecalib(
     kspace: torch.Tensor,
     *,
@@ -97,10 +105,8 @@ def ecalib(
     >>> kspace = bt.phantom([256, 256], kspace=True, ncoils=8)
     >>> sens = bt.ecalib(kspace, calib_size=24)
     """
-    return dispatch(
-        "ecalib",
-        [kspace],
-        None,
+    return _ecalib_gen(
+        kspace,
         r=calib_size,
         m=maps,
         t=threshold,
@@ -117,7 +123,6 @@ def ecalib(
 # ---------------------------------------------------------------------------
 
 
-@bart_op
 def caldir(
     kspace: torch.Tensor,
     *,
@@ -153,7 +158,7 @@ def caldir(
     >>> kspace = bt.phantom([256, 256], kspace=True, ncoils=8)
     >>> sens = bt.caldir(kspace, calib_size=24)
     """
-    return dispatch("caldir", [kspace], None, r=calib_size, **extra_flags)
+    return _caldir_gen(kspace, r=calib_size, **extra_flags)
 
 
 # ---------------------------------------------------------------------------
@@ -213,7 +218,6 @@ L1-shorthand (equivalent to ``R="W:7:0:lambda_"``)::
 # ---------------------------------------------------------------------------
 
 
-@bart_op
 def pics(
     kspace: torch.Tensor,
     sens: torch.Tensor,
@@ -337,10 +341,9 @@ def pics(
 
     >>> reco = bt.pics(kspace, sens, R="T:7:0:0.01", admm=True)
     """
-    return dispatch(
-        "pics",
-        [kspace, sens],
-        None,
+    return _pics_gen(
+        kspace,
+        sens,
         r=lambda_,
         R=R,
         l1=l1 or None,
@@ -359,3 +362,4 @@ def pics(
         e=fast_est or None,
         **extra_flags,
     )
+

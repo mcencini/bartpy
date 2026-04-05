@@ -417,21 +417,28 @@ if(BARTORCH_USE_FINUFFT)
     target_link_libraries(_bartorch_ext PRIVATE finufft)
     target_compile_definitions(_bartorch_ext PRIVATE BARTORCH_USE_FINUFFT)
 
-    # Redirect all calls to grid2/grid2H (from BART's noncart/grid.c and
-    # noncart/nufft.c) to __wrap_grid2/__wrap_grid2H at link time.
+    # Redirect all calls to grid2/grid2H and rolloff_correction/apply_rolloff_correction*
+    # (from BART's noncart/grid.c and noncart/nufft.c) to the __wrap_* implementations
+    # in finufft_grid.cpp at link time.
     # Linux (GNU ld): --wrap; macOS (Apple ld): -wrap,_symbol.
     if(APPLE)
         target_link_options(_bartorch_ext PRIVATE
             -Wl,-wrap,_grid2
             -Wl,-wrap,_grid2H
+            -Wl,-wrap,_rolloff_correction
+            -Wl,-wrap,_apply_rolloff_correction
+            -Wl,-wrap,_apply_rolloff_correction2
         )
     else()
         target_link_options(_bartorch_ext PRIVATE
             -Wl,--wrap,grid2
             -Wl,--wrap,grid2H
+            -Wl,--wrap,rolloff_correction
+            -Wl,--wrap,apply_rolloff_correction
+            -Wl,--wrap,apply_rolloff_correction2
         )
     endif()
-    message(STATUS "FINUFFT grid replacement: --wrap,grid2 --wrap,grid2H active")
+    message(STATUS "FINUFFT grid replacement: --wrap,grid2 --wrap,grid2H --wrap,rolloff_correction --wrap,apply_rolloff_correction --wrap,apply_rolloff_correction2 active")
 endif()
 
 if(USE_CUDA)

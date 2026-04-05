@@ -2,10 +2,14 @@
  * finufft_grid.cpp — FINUFFT-backed spread/interpolate replacements for
  *                    BART's grid2() and grid2H().
  *
- * Linked via  -Wl,--wrap,grid2  -Wl,--wrap,grid2H  so that ALL BART CLI
- * commands that reach the NUFFT codepath (nufft, pics, moba, nlinv, …)
- * automatically use FINUFFT's optimised multi-threaded ES-kernel spreader in
- * place of BART's single-threaded Kaiser-Bessel gridder.
+ * Linked via  -Wl,--wrap,grid2  -Wl,--wrap,grid2H
+ *             -Wl,--wrap,rolloff_correction
+ *             -Wl,--wrap,apply_rolloff_correction
+ *             -Wl,--wrap,apply_rolloff_correction2
+ * so that ALL BART CLI commands that reach the NUFFT codepath (nufft, pics,
+ * moba, nlinv, …) automatically use FINUFFT's optimised multi-threaded
+ * ES-kernel spreader in place of BART's single-threaded Kaiser-Bessel gridder,
+ * AND use a matching ES-kernel rolloff correction instead of BART's KB one.
  *
  * ─────────────────────────────────────────────────────────────────────────────
  * Semantics
@@ -20,8 +24,9 @@
  *      FINUFFT type-2, spreadinterponly=1
  *      c_j  = Σ_k  f_k · φ( (k/N) − x_j/(2π) )
  *
- * Both operations are purely the spread/interpolation step; the FFT and the
- * rolloff (deconvolution) correction remain in BART's nufft.c as usual.
+ * Both operations are purely the spread/interpolation step.  The FFT step
+ * remains in BART's nufft.c unchanged.  The rolloff (deconvolution) step is
+ * also replaced — see __wrap_rolloff_correction and friends below.
  *
  * ─────────────────────────────────────────────────────────────────────────────
  * Coordinate mapping
@@ -44,16 +49,37 @@
  *     = conf->os × Re(traj) × 2π / grid_dims[d]                     ✓
  *
  * ─────────────────────────────────────────────────────────────────────────────
- * Kernel mismatch note
+ * Rolloff (deconvolution) correction — ES-kernel FT
  * ─────────────────────────────────────────────────────────────────────────────
  *
- *  BART applies a Kaiser-Bessel rolloff correction (in nufft.c) that was
- *  designed for BART's own KB spreading kernel.  Since we are replacing the
- *  spreading with FINUFFT's ES kernel, there is a small (~0.1 %) discrepancy
- *  between the spreading kernel and the rolloff correction.  For MRI
- *  applications this is below the noise floor and accepted as a known
- *  approximation.  A future PR will add FINUFFT-consistent rolloff correction
- *  derived from onedim_fseries_kernel().
+ *  After spreading (grid2) and FFT, BART calls apply_rolloff_correction to
+ *  deconvolve the spreading kernel from image space.  The correct deconvolution
+ *  factor for FINUFFT's ES ("exponential of semicircle") kernel is:
+ *
+ *    w(p, d) = 1 / hat_phi_ES( (p - n_d/2) / (n_d * os) )
+ *
+ *  where hat_phi_ES(xi) = 2 * ∫₀^{J/2} exp(β·√(1−(2x/J)²)) · cos(2π·xi·x) dx
+ *  is the continuous FT of the ES kernel at cycles-per-sample frequency xi.
+ *
+ *  This replaces BART's KB correction (1 / ftkb(beta, xi*width) / width).
+ *  Both corrections are derived from the respective kernel FTs; using matching
+ *  spreading kernel and rolloff correction gives exact deconvolution.
+ *
+ *  Kernel parameters for FINUFFT_GRID_TOL=1e-6f and upsampfac=2.0
+ *  (from FINUFFT's setup_spreader, src/spreadinterp.cpp):
+ *    nspread = ceil(-log10(tol/10)) = 7
+ *    betaovns = 2.30  (default for nspread > 4, upsampfac=2.0)
+ *    ES_beta  = betaovns * nspread = 16.1
+ *    ES_hw    = nspread / 2       = 3.5
+ *
+ *  The kernel FT integral is evaluated with a 256-point midpoint rule on
+ *  [0, ES_hw], which gives machine-precision accuracy (the integrand is
+ *  smooth and decays to exp(-ES_beta) ≈ 1e-7 at the integration boundary).
+ *
+ *  The __wrap symbols intercept:
+ *    rolloff_correction         — fills a 3-D correction weight array
+ *    apply_rolloff_correction2  — applies correction with strides + batch
+ *    apply_rolloff_correction   — contiguous wrapper → apply_rolloff_correction2
  *
  * ─────────────────────────────────────────────────────────────────────────────
  * Batch / coil handling
@@ -312,4 +338,191 @@ extern "C" void __wrap_grid2H(
         const_cast<FC*>(src));
 
     finufftf_destroy(plan);
+}
+
+// =============================================================================
+// ES-kernel rolloff (deconvolution) correction
+// =============================================================================
+//
+// Replaces BART's Kaiser-Bessel rolloff with a correction that is consistent
+// with the FINUFFT ES-kernel used in __wrap_grid2 / __wrap_grid2H.
+//
+// ES kernel parameters — must match FINUFFT_GRID_TOL=1e-6f and upsampfac=2.0.
+// From FINUFFT setup_spreader (src/spreadinterp.cpp, upsampfac==2.0 branch):
+//   nspread  = ceil(-log10(tol/10))     = 7
+//   betaovns = 2.30  (default, ns > 4)
+//   ES_beta  = betaovns * nspread       = 16.1
+//   ES_hw    = nspread / 2.0            = 3.5
+// ES kernel: phi(x) = exp(ES_beta * sqrt(1 - (x/ES_hw)^2))  for |x| <= ES_hw
+
+static constexpr double ESRO_BETA  = 2.30 * 7.0;   // 16.1
+static constexpr double ESRO_HW    = 7.0 / 2.0;    // 3.5  (ES_halfwidth)
+static constexpr int    ESRO_NQUAD = 256;           // midpoint quadrature points
+
+/// ES kernel phi(x) at x ∈ [0, ESRO_HW].
+static inline double esro_phi(double x) {
+    const double t = x / ESRO_HW;
+    const double arg = 1.0 - t * t;
+    if (arg < 0.0) return 0.0;
+    return std::exp(ESRO_BETA * std::sqrt(arg));
+}
+
+/// Continuous FT of the ES kernel at cycles-per-sample frequency xi_cps:
+///   hat_phi(xi) = 2 * ∫₀^{ES_hw}  phi(x) · cos(2π·xi·x) dx
+/// Evaluated via midpoint rule on [0, ES_hw] with ESRO_NQUAD points.
+/// The integrand decays to exp(-ESRO_BETA) ≈ 1e-7 at x=ES_hw, so the
+/// midpoint rule converges rapidly even with a relatively small node count.
+static double esro_hat_phi(double xi_cps) {
+    const double h   = ESRO_HW / ESRO_NQUAD;
+    const double tpi = 2.0 * M_PI;
+    double sum = 0.0;
+    for (int i = 0; i < ESRO_NQUAD; ++i) {
+        const double x = (i + 0.5) * h;
+        sum += esro_phi(x) * std::cos(tpi * xi_cps * x);
+    }
+    return 2.0 * h * sum;    // factor 2: symmetry over [-ES_hw, ES_hw]
+}
+
+/// Rolloff correction weight for pixel p in a dimension of size n with
+/// oversampling factor os.  Matches BART's pos() convention exactly:
+///   xi = (p - n/2.0) / (n * os)   [floating-point midpoint, same as BART]
+/// Returns (float)(1 / hat_phi_ES(xi)), clamped away from zero.
+static float esro_weight(long p, long n, double os) {
+    if (n <= 1) return 1.0f;
+    const double xi = ((double)p - (double)n * 0.5) / ((double)n * os);
+    const double hp = esro_hat_phi(xi);
+    if (hp == 0.0) return 1.0f;
+    return static_cast<float>(1.0 / hp);
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// __wrap_rolloff_correction
+//
+// BART v1.0.00 signature (noncart/grid.h):
+//   void rolloff_correction(float os, float width, float beta,
+//                           const long dim[3], complex float* dst)
+//
+// Fills dst[x + dim[0]*(y + z*dim[1])] with the product of 1-D ES rolloff
+// weights for each active spatial dimension.
+// ─────────────────────────────────────────────────────────────────────────────
+extern "C" void __wrap_rolloff_correction(
+    float           os,
+    float           /*width*/,
+    float           /*beta*/,
+    const long      dim[3],
+    _Complex float* dst_c)
+{
+    FC* dst = reinterpret_cast<FC*>(dst_c);
+    const double os_d = static_cast<double>(os);
+
+    // Pre-compute per-dimension weight vectors (avoids repeated integral eval).
+    std::vector<float> wx(dim[0]), wy(dim[1]), wz(dim[2]);
+    for (long x = 0; x < dim[0]; ++x) wx[x] = esro_weight(x, dim[0], os_d);
+    for (long y = 0; y < dim[1]; ++y) wy[y] = esro_weight(y, dim[1], os_d);
+    for (long z = 0; z < dim[2]; ++z) wz[z] = esro_weight(z, dim[2], os_d);
+
+    for (long z = 0; z < dim[2]; ++z)
+        for (long y = 0; y < dim[1]; ++y)
+            for (long x = 0; x < dim[0]; ++x)
+                dst[x + dim[0] * (y + z * dim[1])] =
+                    static_cast<FC>(wx[x] * wy[y] * wz[z]);
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// __wrap_apply_rolloff_correction2
+//
+// BART v1.0.00 signature:
+//   void apply_rolloff_correction2(float os, float width, float beta,
+//          int N, const long dims[N], const long ostrs[N], complex float* dst,
+//          const long istrs[N], const complex float* src)
+//
+// Applies the ES rolloff correction with full stride support and optional
+// batch dimensions (dims[3..N-1]).
+// ─────────────────────────────────────────────────────────────────────────────
+extern "C" void __wrap_apply_rolloff_correction2(
+    float                os,
+    float                /*width*/,
+    float                /*beta*/,
+    int                  N,
+    const long           dims[],
+    const long           ostrs[],
+    _Complex float*      dst_c,
+    const long           istrs[],
+    const _Complex float* src_c)
+{
+    FC*       dst = reinterpret_cast<FC*>(dst_c);
+    const FC* src = reinterpret_cast<const FC*>(src_c);
+    const double os_d = static_cast<double>(os);
+
+    const long d0 = dims[0], d1 = dims[1], d2 = dims[2];
+
+    // Pre-compute per-dimension 1-D weight vectors.
+    std::vector<float> wx(d0), wy(d1), wz(d2);
+    for (long x = 0; x < d0; ++x) wx[x] = esro_weight(x, d0, os_d);
+    for (long y = 0; y < d1; ++y) wy[y] = esro_weight(y, d1, os_d);
+    for (long z = 0; z < d2; ++z) wz[z] = esro_weight(z, d2, os_d);
+
+    // Accumulate batch size and strides from dims[3..N-1].
+    long size_bat = 1;
+    long obstr = -1, ibstr = -1;
+    for (int i = 3; i < N; ++i) {
+        if (1 == dims[i]) continue;
+        if (-1 == obstr) { obstr = ostrs[i]; ibstr = istrs[i]; }
+        size_bat *= dims[i];
+    }
+    // Convert byte strides to element strides (CFL_SIZE = sizeof(complex float) = 8).
+    const long cfl = static_cast<long>(sizeof(FC));
+    const long os0 = ostrs[0] / cfl;
+    const long os1 = ostrs[1] / cfl;
+    const long os2 = ostrs[2] / cfl;
+    const long is0 = istrs[0] / cfl;
+    const long is1 = istrs[1] / cfl;
+    const long is2 = istrs[2] / cfl;
+    const long obs = (obstr == -1) ? 0L : obstr / cfl;
+    const long ibs = (ibstr == -1) ? 0L : ibstr / cfl;
+
+#pragma omp parallel for collapse(3)
+    for (long z = 0; z < d2; ++z) {
+        for (long y = 0; y < d1; ++y) {
+            for (long x = 0; x < d0; ++x) {
+                const long oidx = x * os0 + y * os1 + z * os2;
+                const long iidx = x * is0 + y * is1 + z * is2;
+                const float val  = wx[x] * wy[y] * wz[z];
+                for (long i = 0; i < size_bat; ++i)
+                    dst[oidx + i * obs] =
+                        static_cast<FC>(val) * src[iidx + i * ibs];
+            }
+        }
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// __wrap_apply_rolloff_correction
+//
+// BART v1.0.00 signature:
+//   void apply_rolloff_correction(float os, float width, float beta,
+//          int N, const long dimensions[N],
+//          complex float* dst, const complex float* src)
+//
+// Delegates to __wrap_apply_rolloff_correction2 with contiguous strides,
+// matching BART's own implementation which calls:
+//   apply_rolloff_correction2(..., MD_STRIDES(N,dims,CFL_SIZE), dst,
+//                                  MD_STRIDES(N,dims,CFL_SIZE), src)
+// ─────────────────────────────────────────────────────────────────────────────
+extern "C" void __wrap_apply_rolloff_correction(
+    float                os,
+    float                width,
+    float                beta,
+    int                  N,
+    const long           dims[],
+    _Complex float*      dst_c,
+    const _Complex float* src_c)
+{
+    // Build contiguous strides: strs[0] = CFL_SIZE, strs[i] = strs[i-1]*dims[i-1].
+    std::vector<long> strs(N);
+    long s = static_cast<long>(sizeof(FC));  // CFL_SIZE = 8
+    for (int i = 0; i < N; ++i) { strs[i] = s; s *= dims[i]; }
+
+    __wrap_apply_rolloff_correction2(os, width, beta, N, dims,
+        strs.data(), dst_c, strs.data(), src_c);
 }

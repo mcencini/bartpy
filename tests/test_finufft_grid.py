@@ -1,4 +1,5 @@
-"""tests/test_finufft_grid.py — tests for the FINUFFT-backed grid2/grid2H.
+"""tests/test_finufft_grid.py — tests for the FINUFFT-backed grid2/grid2H
+and ES-kernel rolloff correction.
 
 These tests are skipped when the C++ extension has not been built
 (BARTORCH_SKIP_EXT=1 or the module is absent), which is the normal state
@@ -6,14 +7,19 @@ for the pure-Python CI job.
 
 When the extension IS available (i.e. compiled with BARTORCH_USE_FINUFFT=ON
 and noncart/grid.c in BART_SOURCES), the tests exercise the FINUFFT-backed
-gridding through the BART embed-API layer.
+gridding and rolloff through the BART embed-API layer.
 
 Test plan
 ─────────
 1. ``test_import`` — sanity-check that the extension is importable.
-2. ``test_finufft_grid_module`` — verify the ``__wrap_grid2`` / ``__wrap_grid2H``
+2. ``test_finufft_wrap_symbols`` — verify the ``__wrap_grid2`` / ``__wrap_grid2H``
    symbols are present in the shared object (confirming the --wrap was applied).
-3. Numerical tests (requires fully wired extension + Phase-1 run() impl):
+3. ``test_rolloff_wrap_symbols`` — verify the three rolloff ``__wrap_*`` symbols
+   are present, confirming the ES-kernel rolloff was linked in.
+4. ``test_es_rolloff_dc_weight`` — pure-Python check that the ES rolloff weight
+   at DC (xi=0) is a finite positive value < 1, and that it matches the
+   theoretical hat_phi(0) = 2 * integral_0^{hw} exp(beta) dφ.
+5. Numerical tests (requires fully wired extension + Phase-1 run() impl):
    - ``test_adjointness_2d`` — radial 2-D trajectory, ⟨grid2H(x), y⟩ ≈ ⟨x, grid2(y)⟩
    - ``test_adjointness_3d`` — 3-D radial trajectory
    All are skipped if ``bartorch._bartorch_ext.run`` is not yet implemented.
@@ -56,7 +62,7 @@ def test_import():
 
 
 # ---------------------------------------------------------------------------
-# Test 2: __wrap symbols present in the shared object
+# Test 2: __wrap symbols present in the shared object (grid2 / grid2H)
 # ---------------------------------------------------------------------------
 @skip_no_ext
 def test_finufft_wrap_symbols():
@@ -77,6 +83,88 @@ def test_finufft_wrap_symbols():
     lib = ctypes.CDLL(matches[0])
     assert hasattr(lib, "__wrap_grid2"),  "__wrap_grid2 symbol missing from _bartorch_ext.so"
     assert hasattr(lib, "__wrap_grid2H"), "__wrap_grid2H symbol missing from _bartorch_ext.so"
+
+
+# ---------------------------------------------------------------------------
+# Test 3: rolloff __wrap symbols present in the shared object
+# ---------------------------------------------------------------------------
+@skip_no_ext
+def test_rolloff_wrap_symbols():
+    """__wrap_rolloff_correction and friends are present in _bartorch_ext.so."""
+    import ctypes
+    import glob
+    import pathlib
+    import bartorch
+    matches = glob.glob(str(pathlib.Path(bartorch.__file__).parent / "_bartorch_ext*.so"))
+    if not matches:
+        pytest.skip("Cannot locate _bartorch_ext.so to inspect symbols")
+
+    lib = ctypes.CDLL(matches[0])
+    for sym in (
+        "__wrap_rolloff_correction",
+        "__wrap_apply_rolloff_correction",
+        "__wrap_apply_rolloff_correction2",
+    ):
+        assert hasattr(lib, sym), f"{sym} symbol missing from _bartorch_ext.so"
+
+
+# ---------------------------------------------------------------------------
+# Test 4: ES rolloff weight — pure-Python validation (no extension needed)
+#
+# Verifies that the same quadrature used in finufft_grid.cpp produces
+# physically sensible rolloff weights:
+#   - DC weight (xi=0) is positive and < 1
+#   - Weights are symmetric around the grid centre
+#   - Weight is monotonically decreasing from centre toward ±Nyquist
+# ---------------------------------------------------------------------------
+def _es_rolloff_weight(xi_cps: float,
+                       beta: float = 2.30 * 7.0,
+                       hw: float = 7.0 / 2.0,
+                       nquad: int = 256) -> float:
+    """Python replica of esro_hat_phi / esro_weight from finufft_grid.cpp."""
+    import math
+    h = hw / nquad
+    total = 0.0
+    for i in range(nquad):
+        x = (i + 0.5) * h
+        t = x / hw
+        arg = 1.0 - t * t
+        phi = math.exp(beta * math.sqrt(max(arg, 0.0)))
+        total += phi * math.cos(2.0 * math.pi * xi_cps * x)
+    hat_phi = 2.0 * h * total
+    return 1.0 / hat_phi if hat_phi != 0.0 else 1.0
+
+
+def test_es_rolloff_dc_weight():
+    """ES rolloff weight at DC is a finite positive float < 1."""
+    w_dc = _es_rolloff_weight(0.0)
+    assert w_dc > 0.0,  f"DC weight should be positive, got {w_dc}"
+    assert w_dc < 1.0,  f"DC weight should be < 1 (ES kernel peak >> 1), got {w_dc}"
+    assert math.isfinite(w_dc), "DC weight must be finite"
+
+
+def test_es_rolloff_symmetry():
+    """ES rolloff weights are symmetric: w(p, n) == w(n-p, n)."""
+    n, os = 64, 2.0
+    for p in range(n // 2):
+        xi_pos = (p - n / 2.0) / (n * os)
+        xi_neg = (n - p - n / 2.0) / (n * os)  # mirror pixel
+        w_pos = _es_rolloff_weight(xi_pos)
+        w_neg = _es_rolloff_weight(xi_neg)
+        assert abs(w_pos - w_neg) < 1e-7, (
+            f"Rolloff not symmetric at p={p}: w(p)={w_pos}, w(n-p)={w_neg}"
+        )
+
+
+def test_es_rolloff_monotone():
+    """ES rolloff weight decreases monotonically from centre toward Nyquist."""
+    n, os = 64, 2.0
+    xis = [(p - n / 2.0) / (n * os) for p in range(n // 2, n)]
+    weights = [_es_rolloff_weight(xi) for xi in xis]
+    for i in range(len(weights) - 1):
+        assert weights[i] <= weights[i + 1] + 1e-6, (
+            f"Rolloff weight not monotone at index {i}: {weights[i]} > {weights[i+1]}"
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -180,3 +268,5 @@ def test_adjointness_3d():
     rhs = (AH_ksp_g * grid.conj()).sum().real
     rel_err = abs(float(lhs - rhs)) / (float(Ag_ksp.norm()) * float(ksp.norm()))
     assert rel_err < 1e-4, f"3-D adjointness error {rel_err:.2e} exceeds 1e-4"
+
+

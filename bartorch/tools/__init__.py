@@ -23,13 +23,6 @@ Tool layers
   overrides a small set of commands with richer Pythonic APIs (e.g.
   :func:`ecalib`, :func:`caldir`, :func:`pics`).
 * This ``__init__`` re-exports the final public API from ``_commands``.
-
-Generic access
---------------
-Any BART command can also be called via :func:`call_bart`::
-
-    import bartorch.tools as bt
-    result = bt.call_bart("nufft", traj, kspace, output_dims=[nx, ny])
 """
 
 from __future__ import annotations

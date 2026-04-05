@@ -10,7 +10,6 @@ These tests verify that:
 
 import pytest
 
-
 # If the extension was not compiled (BARTORCH_SKIP_EXT=1), skip gracefully.
 try:
     from bartorch import _bartorch_ext as ext
@@ -33,6 +32,7 @@ def test_ext_imports():
 def test_ext_run_raises_runtime_error():
     """run() raises RuntimeError (stub) not a crash or ImportError."""
     import torch
+
     from bartorch import _bartorch_ext as m
 
     with pytest.raises(RuntimeError, match="not yet implemented"):

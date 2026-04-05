@@ -36,11 +36,12 @@ intersphinx_mapping = {
 }
 
 # Notebooks live in the top-level examples/ directory (symlinked as docs/examples/).
-# Do not execute notebooks during the Sphinx build — the C++ extension is required
-# for all bt.* calls and is not compiled in the docs-only CI environment.
-# Notebooks are committed with stripped outputs (nbstripout pre-commit hook) and
-# rendered as static source in the generated HTML.
-nbsphinx_execute = "never"
+# Always execute notebooks during the Sphinx build so ReadTheDocs serves outputs.
+nbsphinx_execute = "always"
+# Allow notebook cell errors (e.g. from the stub C++ extension) without failing
+# the Sphinx build.
+# TODO: remove once _bartorch_ext.run() is fully implemented (Phase 1 roadmap).
+nbsphinx_allow_errors = True
 
 # Follow symlinks so that docs/examples/ → ../examples/ is resolved correctly.
 # This is the default in Sphinx ≥ 7 but we set it explicitly for clarity.

@@ -6,3 +6,4 @@ nbconvert
 ipykernel
 torch
 numpy
+matplotlib

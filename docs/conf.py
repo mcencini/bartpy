@@ -10,6 +10,7 @@ release = version
 
 extensions = [
     "sphinx.ext.autodoc",
+    "sphinx.ext.autosummary",
     "sphinx.ext.napoleon",
     "sphinx.ext.viewcode",
     "sphinx.ext.intersphinx",
@@ -35,8 +36,11 @@ intersphinx_mapping = {
 }
 
 # Notebooks live in the top-level examples/ directory (symlinked as docs/examples/).
-# Always execute notebooks during the Sphinx build so ReadTheDocs serves outputs.
-nbsphinx_execute = "always"
+# Do not execute notebooks during the Sphinx build — the C++ extension is required
+# for all bt.* calls and is not compiled in the docs-only CI environment.
+# Notebooks are committed with stripped outputs (nbstripout pre-commit hook) and
+# rendered as static source in the generated HTML.
+nbsphinx_execute = "never"
 
 # Follow symlinks so that docs/examples/ → ../examples/ is resolved correctly.
 # This is the default in Sphinx ≥ 7 but we set it explicitly for clarity.

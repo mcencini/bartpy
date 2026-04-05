@@ -513,7 +513,7 @@ def cabs(
     **extra_flags: Any,
 ) -> torch.Tensor | tuple[torch.Tensor, ...]:
     """
-    Absolute value of array (|<input>|).
+    Absolute value of array (\\|<input>\\|).
 
     Equivalent to calling ``bart cabs`` with the given arguments.
     See the BART documentation for full details.

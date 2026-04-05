@@ -223,7 +223,7 @@ def _parse_tool_source(tool_name: str, src_path: Path) -> dict:
                 return "\\\\"
             return "\\\\" + c
 
-        return re.sub(r"\\(.)", _replace, s).strip()
+        return re.sub(r"\\(.)", _replace, s).strip().replace("|", "\\\\|")
 
     # 1. Description (help_str)
     m = re.search(

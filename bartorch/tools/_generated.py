@@ -119,6 +119,7 @@ Source-based generation: no (fallback stubs)
 .. autosummary::
    :nosignatures:
 
+   pics
    pocsense
    itsense
    sake
@@ -162,8 +163,10 @@ Source-based generation: no (fallback stubs)
    :nosignatures:
 
    affinereg
+   caldir
    compress
    conv
+   ecalib
    estmat
    looklocker
    meanshape
@@ -322,6 +325,29 @@ def calc(*inputs: torch.Tensor, output_dims: list[int] | None = None,
     torch.Tensor
     """
     return dispatch('calc', list(inputs), output_dims, **extra_flags)
+
+
+@bart_op
+def caldir(*inputs: torch.Tensor, output_dims: list[int] | None = None,
+           **extra_flags: Any) -> torch.Tensor | tuple[torch.Tensor, ...]:
+    """Wraps BART's ``caldir`` command.
+
+    Run ``bart caldir -h`` for full documentation.
+
+    Parameters
+    ----------
+    *inputs : torch.Tensor
+        Positional tensor inputs.
+    output_dims : list[int], optional
+        Expected output shape.
+    **extra_flags : Any
+        BART flags forwarded directly.
+
+    Returns
+    -------
+    torch.Tensor
+    """
+    return dispatch('caldir', list(inputs), output_dims, **extra_flags)
 
 
 @bart_op
@@ -690,6 +716,29 @@ def delta(*inputs: torch.Tensor, output_dims: list[int] | None = None,
     torch.Tensor
     """
     return dispatch('delta', list(inputs), output_dims, **extra_flags)
+
+
+@bart_op
+def ecalib(*inputs: torch.Tensor, output_dims: list[int] | None = None,
+           **extra_flags: Any) -> torch.Tensor | tuple[torch.Tensor, ...]:
+    """Wraps BART's ``ecalib`` command.
+
+    Run ``bart ecalib -h`` for full documentation.
+
+    Parameters
+    ----------
+    *inputs : torch.Tensor
+        Positional tensor inputs.
+    output_dims : list[int], optional
+        Expected output shape.
+    **extra_flags : Any
+        BART flags forwarded directly.
+
+    Returns
+    -------
+    torch.Tensor
+    """
+    return dispatch('ecalib', list(inputs), output_dims, **extra_flags)
 
 
 @bart_op
@@ -1472,6 +1521,29 @@ def phantom(*inputs: torch.Tensor, output_dims: list[int] | None = None,
     torch.Tensor
     """
     return dispatch('phantom', list(inputs), output_dims, **extra_flags)
+
+
+@bart_op
+def pics(*inputs: torch.Tensor, output_dims: list[int] | None = None,
+           **extra_flags: Any) -> torch.Tensor | tuple[torch.Tensor, ...]:
+    """Wraps BART's ``pics`` command.
+
+    Run ``bart pics -h`` for full documentation.
+
+    Parameters
+    ----------
+    *inputs : torch.Tensor
+        Positional tensor inputs.
+    output_dims : list[int], optional
+        Expected output shape.
+    **extra_flags : Any
+        BART flags forwarded directly.
+
+    Returns
+    -------
+    torch.Tensor
+    """
+    return dispatch('pics', list(inputs), output_dims, **extra_flags)
 
 
 @bart_op
@@ -2263,6 +2335,7 @@ __all__ = [
     'bloch',
     'cabs',
     'calc',
+    'caldir',
     'calmat',
     'carg',
     'casorati',
@@ -2279,6 +2352,7 @@ __all__ = [
     'creal',
     'crop',
     'delta',
+    'ecalib',
     'ecaltwo',
     'estdelay',
     'estdims',
@@ -2313,6 +2387,7 @@ __all__ = [
     'onehotenc',
     'pattern',
     'phantom',
+    'pics',
     'pocsense',
     'poisson',
     'poly',

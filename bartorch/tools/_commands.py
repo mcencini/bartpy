@@ -1,14 +1,16 @@
-"""Reconstruction tools — bartorch.tools.pics.
+"""bartorch.tools._commands — Special-case CLI wrappers that override generated ones.
 
-Wraps BART's calibration and parallel-imaging compressed-sensing commands:
+The auto-generated layer in :mod:`bartorch.tools._generated` provides thin
+wrappers for every BART command.  This module imports that full suite and then
+re-defines a small set of commands that benefit from a richer Python API:
 
-* :func:`ecalib`  — ESPIRiT coil sensitivity estimation
-* :func:`caldir`  — Direct coil calibration
-* :func:`pics`    — Parallel Imaging Compressed Sensing reconstruction
+* :func:`ecalib` — maps Pythonic keyword names to BART flags
+* :func:`caldir` — maps ``calib_size`` to the positional BART argument
+* :func:`pics`   — ``R`` accepts ``list[str]`` for multiple regularisers,
+  with comprehensive documentation of the regularisation syntax
 
-All three functions expose the **full BART CLI API** through their keyword
-arguments.  Named parameters cover the most commonly used flags; anything
-else can be forwarded as ``**extra_flags``.
+All other commands are re-exported unchanged via ``from _generated import *``.
+The ``__init__.py`` imports from this module to build the public API.
 """
 
 from __future__ import annotations
@@ -19,8 +21,21 @@ import torch
 
 from bartorch.core.graph import dispatch
 from bartorch.core.tensor import bart_op
+from bartorch.tools._generated import *  # noqa: F401,F403
+from bartorch.tools._generated import __all__ as _generated_all
 
-__all__ = ["ecalib", "caldir", "pics"]
+__all__ = [
+    *_generated_all,
+    # Overrides below replace the generated versions of the same name
+    "ecalib",
+    "caldir",
+    "pics",
+]
+
+
+# ---------------------------------------------------------------------------
+# ESPIRiT calibration — Pythonic keyword → BART flag mapping
+# ---------------------------------------------------------------------------
 
 
 @bart_op
@@ -97,6 +112,11 @@ def ecalib(
     )
 
 
+# ---------------------------------------------------------------------------
+# Direct calibration
+# ---------------------------------------------------------------------------
+
+
 @bart_op
 def caldir(
     kspace: torch.Tensor,
@@ -137,7 +157,7 @@ def caldir(
 
 
 # ---------------------------------------------------------------------------
-# PICS regularisation helpers
+# PICS regularisation guide
 # ---------------------------------------------------------------------------
 
 _R_GUIDE = """\
@@ -186,6 +206,11 @@ L1-shorthand (equivalent to ``R="W:7:0:lambda_"``)::
 
     pics(kspace, sens, lambda_=0.01, l1=True)
 """
+
+
+# ---------------------------------------------------------------------------
+# PICS reconstruction
+# ---------------------------------------------------------------------------
 
 
 @bart_op

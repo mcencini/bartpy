@@ -48,11 +48,7 @@ from pathlib import Path
 # Tools with hand-written richer Python wrappers — skip in generated file
 # ---------------------------------------------------------------------------
 
-_SKIP_TOOLS: set[str] = {
-    "ecalib",
-    "caldir",
-    "pics",
-}
+_SKIP_TOOLS: set[str] = set()
 
 # ---------------------------------------------------------------------------
 # Tool categories for Sphinx API grouping

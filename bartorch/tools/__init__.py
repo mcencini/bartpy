@@ -15,13 +15,14 @@ The conversion to BART's Fortran-order bitmask is handled transparently by
 
 Example: ``bt.fft(x, axes=(-1, -2))`` — 2-D FFT over the last two axes.
 
-Named tools
+Tool layers
 -----------
-The following tools have hand-written Pythonic APIs:
-``ecalib``, ``caldir``, ``pics``.
-
-All other BART commands (100+) are exposed via auto-generated wrappers in
-:mod:`bartorch.tools._generated`.
+* :mod:`bartorch.tools._generated` — auto-generated thin wrappers for every
+  BART command (100+), produced by ``build_tools/gen_tools.py``.
+* :mod:`bartorch.tools._commands`  — imports the full generated suite and
+  overrides a small set of commands with richer Pythonic APIs (e.g.
+  :func:`ecalib`, :func:`caldir`, :func:`pics`).
+* This ``__init__`` re-exports the final public API from ``_commands``.
 
 Generic access
 --------------
@@ -29,31 +30,24 @@ Any BART command can also be called via :func:`call_bart`::
 
     import bartorch.tools as bt
     result = bt.call_bart("nufft", traj, kspace, output_dims=[nx, ny])
-
-Auto-generated wrappers (build-time)
--------------------------------------
-``build_tools/gen_tools.py`` generates ``bartorch/tools/_generated.py`` at
-build time, providing typed wrappers for every BART CLI command (100+).
 """
 
 from __future__ import annotations
 
 from bartorch.tools._dispatch import call_bart, make_tool
-from bartorch.tools.pics import caldir, ecalib, pics
 
 __all__ = [
-    # Generic entry point
     "call_bart",
     "make_tool",
-    # Calibration / reconstruction (hand-written)
-    "ecalib",
-    "caldir",
-    "pics",
 ]
 
-# Auto-generated wrappers (created at build time by build_tools/gen_tools.py).
-# Missing in source trees that have not been built; silently ignored.
+# Full suite: auto-generated wrappers + special-case overrides.
+# Missing when the package has not been built; silently ignored.
 try:
-    from bartorch.tools._generated import *  # noqa: F401,F403
+    from bartorch.tools._commands import *  # noqa: F401,F403
+    from bartorch.tools._commands import __all__ as _commands_all
+
+    __all__ = [*__all__, *_commands_all]
 except ImportError:
     pass
+

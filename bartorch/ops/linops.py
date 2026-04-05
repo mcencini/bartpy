@@ -38,11 +38,11 @@ BartLinop
 
 from __future__ import annotations
 
+__all__ = ["BartLinop"]
+
 from typing import Any
 
 import torch
-
-__all__ = ["BartLinop"]
 
 
 class BartLinop:

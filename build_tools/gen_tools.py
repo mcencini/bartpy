@@ -38,7 +38,6 @@ from __future__ import annotations
 
 import argparse
 import keyword
-import os
 import re
 import sys
 import textwrap
@@ -48,13 +47,62 @@ from pathlib import Path
 # Tools with hand-written richer Python wrappers — skip in generated file
 # ---------------------------------------------------------------------------
 
-_SKIP_TOOLS: set[str] = {
-    "ecalib",
-    "caldir",
-    "fft",
-    "phantom",
-    "pics",
+_SKIP_TOOLS: set[str] = set()
+
+# ---------------------------------------------------------------------------
+# Tool categories for Sphinx API grouping
+# ---------------------------------------------------------------------------
+
+_TOOL_CATEGORIES: dict[str, list[str]] = {
+    "Fourier Transforms": ["fft", "fftmod", "fftshift"],
+    "Simulation / Phantoms": ["phantom", "signal", "bloch"],
+    "Sampling / Trajectories": ["traj", "poisson", "pattern", "upat", "estdelay"],
+    "Non-Cartesian": ["nufft", "nufftbase"],
+    "Coil Processing": ["coils", "cc", "ccapply", "walsh", "whiten", "rss"],
+    "Calibration": ["ecalib", "caldir", "calmat", "ecaltwo", "estvar", "estdims"],
+    "Image Processing": [
+        "resize", "reshape", "crop", "flip", "circshift", "transpose",
+        "repmat", "join", "split", "extract", "squeeze", "flatten",
+        "copy", "slice", "fmac", "scale", "saxpy",
+    ],
+    "Wavelets / Sparsity": ["wavelet", "cdf97", "threshold", "tgv", "rof"],
+    "Low-Rank / Subspace": ["svd", "lrmatrix", "casorati", "ssa"],
+    "Iterative Algorithms": [
+        "pics", "pocsense", "itsense", "sake", "nlinv", "moba", "mobafit",
+        "irgnm",
+    ],
+    "Utilities": [
+        "bitmask", "avg", "noise", "nrmse", "normalize", "std", "sdot",
+        "zeros", "delta", "ones", "rand", "randn",
+        "cabs", "carg", "creal", "conj", "cpyphs",
+        "spow", "zexp", "poly", "calc", "invert",
+        "window", "filter", "homodyne",
+        "rmfreq", "mandelbrot",
+    ],
 }
+
+# Tools whose BART implementation supports GPU via the -g flag
+_GPU_CAPABLE_TOOLS: frozenset[str] = frozenset({
+    "nlinv", "moba", "mobafit", "nufft", "nufftbase",
+    "pocsense", "itsense",
+})
+
+
+def _cuda_note(tool_name: str, opts: list) -> str:
+    """Return a Sphinx note about CUDA compatibility for *tool_name*."""
+    # Check if the tool has a -g GPU flag in its opts
+    has_gpu_flag = any(raw_key == "g" for _, _, raw_key, _, _ in opts)
+    if tool_name in _GPU_CAPABLE_TOOLS or has_gpu_flag:
+        return (
+            "    .. note::\n"
+            "        **CUDA:** GPU-capable when BART is compiled with\n"
+            "        ``USE_CUDA=ON`` (pass ``g=True`` to enable).\n"
+        )
+    return (
+        "    .. note::\n"
+        "        **CUDA:** CPU only.  CUDA tensors are automatically moved to\n"
+        "        CPU before dispatch and returned to the original device.\n"
+    )
 
 # ---------------------------------------------------------------------------
 # BART OPT type → (Python annotation, default value string)
@@ -353,8 +401,9 @@ def _generate_func(info: dict) -> str:
         doc_lines.append(f"    Wraps BART's ``{name}`` command.")
     doc_lines.append("")
     doc_lines.append(f"    Equivalent to calling ``bart {name}`` with the given arguments.")
-    doc_lines.append(f"    See the BART documentation for full details.")
+    doc_lines.append("    See the BART documentation for full details.")
     doc_lines.append("")
+    doc_lines.append(_cuda_note(name, opts))
     doc_lines.append("    Parameters")
     doc_lines.append("    ----------")
 
@@ -386,7 +435,7 @@ def _generate_func(info: dict) -> str:
 
     doc_lines.append("    **extra_flags : Any")
     doc_lines.append(f"        Additional BART ``{name}`` flags forwarded directly.")
-    doc_lines.append("    ")
+    doc_lines.append("")
     doc_lines.append("    Returns")
     doc_lines.append("    -------")
     doc_lines.append("    torch.Tensor")
@@ -476,31 +525,58 @@ def _generate_file(out_path: Path, bart_src: Path | None) -> None:
     _INTERNAL = {"bart", "bench", "version"}
     emit_tools = [t for t in tools if t not in _SKIP_TOOLS and t not in _INTERNAL]
 
-    header = textwrap.dedent(
-        f'''\
-        """bartorch.tools._generated — Auto-generated BART CLI wrappers.
+    # Build grouped autosummary for Sphinx
+    tool_set = set(emit_tools)
+    categorised: set[str] = set()
+    autosummary_sections: list[str] = []
+    for cat_name, cat_tools in _TOOL_CATEGORIES.items():
+        in_cat = [t.replace("-", "_") for t in cat_tools if t in tool_set]
+        if in_cat:
+            categorised.update(t for t in cat_tools if t in tool_set)
+            entries = "\n".join(f"   {t}" for t in in_cat)
+            autosummary_sections.append(
+                f".. rubric:: {cat_name}\n\n"
+                f".. autosummary::\n   :nosignatures:\n\n"
+                f"{entries}\n"
+            )
+    misc_tools = [t.replace("-", "_") for t in emit_tools if t not in categorised]
+    if misc_tools:
+        entries = "\n".join(f"   {t}" for t in misc_tools)
+        autosummary_sections.append(
+            f".. rubric:: Miscellaneous\n\n"
+            f".. autosummary::\n   :nosignatures:\n\n"
+            f"{entries}\n"
+        )
+    sphinx_toc = "\n".join(autosummary_sections)
 
-        Generated by ``build_tools/gen_tools.py``.  Do not edit by hand.
-
-        Each function wraps one BART command.  All functions:
-        * Accept named keyword arguments matching each BART flag (with type hints).
-        * Are decorated with ``@bart_op`` for automatic ``complex64`` normalisation.
-        * Accept ``**extra_flags`` for flags not listed as named parameters.
-        * Return a plain ``complex64 torch.Tensor`` (or tuple) in C-order.
-
-        Source-based generation: {"yes (bart/src/ parsed)" if have_source else "no (fallback stubs)"}
-        """
-
-        from __future__ import annotations
-
-        from typing import Any
-
-        import torch
-
-        from bartorch.core.graph import dispatch
-        from bartorch.core.tensor import bart_op
-
-        '''
+    source_note = "yes (bart/src/ parsed)" if have_source else "no (fallback stubs)"
+    header = (
+        '"""bartorch.tools._generated — Auto-generated BART CLI wrappers.\n'
+        "\n"
+        "Generated by ``build_tools/gen_tools.py``.  Do not edit by hand.\n"
+        "\n"
+        "Each function wraps one BART command.  All functions:\n"
+        "\n"
+        "* Accept named keyword arguments matching each BART flag (with type hints).\n"
+        "* Are decorated with ``@bart_op`` for automatic ``complex64`` normalisation.\n"
+        "* Accept ``**extra_flags`` for flags not listed as named parameters.\n"
+        "* Return a plain ``complex64 torch.Tensor`` (or tuple) in C-order.\n"
+        "* Carry a CUDA compatibility note in their docstring.\n"
+        "\n"
+        f"Source-based generation: {source_note}\n"
+        "\n"
+        + sphinx_toc
+        + '\n"""\n'
+        "\n"
+        "from __future__ import annotations\n"
+        "\n"
+        "from typing import Any\n"
+        "\n"
+        "import torch\n"
+        "\n"
+        "from bartorch.core.graph import dispatch\n"
+        "from bartorch.core.tensor import bart_op\n"
+        "\n"
     )
 
     func_lines: list[str] = []

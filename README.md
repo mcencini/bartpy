@@ -100,7 +100,7 @@ import bartorch.tools as bt
 
 # Named wrappers with type hints and docstrings
 result = bt.pics(kspace, sens, R="T:7:0:0.01")       # total variation PICS
-kspace = bt.nufft(traj, kspace_data, a=True)          # adjoint NUFFT
+kspace = bt.nufft(traj, kspace_data, adjoint=True)    # adjoint NUFFT
 rss    = bt.rss(kspace, bitmask=3)                    # root-sum-of-squares
 
 # Generic entry point — any BART command by name
@@ -115,8 +115,12 @@ python build_tools/gen_tools.py
 ```
 bartorch/
 ├── ops/           Internal types: BartLinop (operator algebra)
-├── tools/         User-facing tools: fft, phantom, ecalib, caldir, pics,
-│                  iterative algorithms, and auto-generated CLI wrappers
+├── tools/         User-facing BART CLI wrappers
+│   ├── _generated.py   Auto-generated wrappers for every BART command (143),
+│   │                   parsed from BART source by build_tools/gen_tools.py
+│   ├── _commands.py    Pythonic overrides (fft/ifft, ecalib, caldir, pics,
+│   │                   nlinv, moba, nufft) — delegate to generated functions
+│   └── _dispatch.py    call_bart() generic entry point + make_tool() factory
 ├── core/          Dispatch graph, BartContext, dtype normalisation
 ├── utils/         CFL read/write, axes_to_flags()
 └── csrc/          PyTorch C++ extension (_bartorch_ext)
@@ -136,6 +140,21 @@ GitHub mirror: [github.com/mrirecon/bart](https://github.com/mrirecon/bart)).
 ```bash
 git submodule update --init --recursive
 ```
+
+## Examples
+
+The `examples/` directory at the repository root contains Jupyter notebooks
+demonstrating the bartorch API:
+
+| Notebook | Description |
+|---|---|
+| [`01_high_level_tools.ipynb`](examples/01_high_level_tools.ipynb) | High-level BART tools: phantom, FFT, ESPIRiT, PICS |
+| [`02_library_internals.ipynb`](examples/02_library_internals.ipynb) | BartContext hot path, `@bart_op` dtype handling, linop algebra |
+| [`phantom_demo.ipynb`](examples/phantom_demo.ipynb) | Basic phantom + PICS stub for quick orientation |
+
+The same notebooks are rendered in the
+[online documentation](https://mcencini.github.io/bartpy/examples/index.html)
+as a gallery via `nbsphinx`.
 
 ## License
 

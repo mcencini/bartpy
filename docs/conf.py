@@ -34,7 +34,14 @@ intersphinx_mapping = {
     "torch": ("https://pytorch.org/docs/stable", None),
 }
 
+# Notebooks live in the top-level examples/ directory (symlinked as docs/examples/).
+# Never execute notebooks during the Sphinx build — they require the compiled C++
+# extension and are provided for reading / download only.
 nbsphinx_execute = "never"
+
+# Follow symlinks so that docs/examples/ → ../examples/ is resolved correctly.
+# This is the default in Sphinx ≥ 7 but we set it explicitly for clarity.
+html_extra_path = []
 
 autodoc_typehints = "description"
 

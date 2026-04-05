@@ -103,9 +103,6 @@ result = bt.pics(kspace, sens, R="T:7:0:0.01")       # total variation PICS
 kspace = bt.nufft(traj, kspace_data, adjoint=True)    # adjoint NUFFT
 rss    = bt.rss(kspace, bitmask=3)                    # root-sum-of-squares
 
-# Generic entry point — any BART command by name
-result = bt.call_bart("nufft", traj, kspace, output_dims=[nx, ny])
-
 # Regenerate wrappers after updating the BART submodule
 python build_tools/gen_tools.py
 ```
@@ -118,9 +115,8 @@ bartorch/
 ├── tools/         User-facing BART CLI wrappers
 │   ├── _generated.py   Auto-generated wrappers for every BART command (143),
 │   │                   parsed from BART source by build_tools/gen_tools.py
-│   ├── _commands.py    Pythonic overrides (fft/ifft, ecalib, caldir, pics,
-│   │                   nlinv, moba, nufft) — delegate to generated functions
-│   └── _dispatch.py    call_bart() generic entry point + make_tool() factory
+│   └── _commands.py    Pythonic overrides (fft/ifft, ecalib, caldir, pics,
+│                       nlinv, moba, nufft) — delegate to generated functions
 ├── core/          Dispatch graph, BartContext, dtype normalisation
 ├── utils/         CFL read/write, axes_to_flags()
 └── csrc/          PyTorch C++ extension (_bartorch_ext)

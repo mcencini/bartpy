@@ -88,12 +88,8 @@ bartpy/                           ← repository root
 │   │   └── linops.py             ← BartLinop (@, +, *, .H, .N)
 │   │
 │   ├── tools/                    ← User-facing CLI tool wrappers
-│   │   ├── __init__.py           ← exports all named tools + call_bart
-│   │   ├── _dispatch.py          ← call_bart(), make_tool() factory
-│   │   ├── fft.py                ← fft(), ifft()  [axes_to_flags]
-│   │   ├── phantom.py            ← phantom()
-│   │   ├── pics.py               ← ecalib(), caldir(), pics()  [full API]
-│   │   ├── italgos.py            ← conjgrad(), ist(), fista(), irgnm(), chambolle_pock()
+│   │   ├── __init__.py           ← exports all named tools
+│   │   ├── _commands.py          ← Pythonic overrides (fft/ifft, ecalib, caldir, pics, nlinv, moba, nufft)
 │   │   └── _generated.py         ← generated from BART source (committed)
 │   │
 │   ├── utils/
@@ -325,8 +321,6 @@ CMAKE_ARGS="-DUSE_CUDA=ON" pip install -e .
 | `fista(op, b, prox, ...)` | — | FISTA solver (Phase 4) |
 | `irgnm(op, b, ...)` | — | IRGNM (Phase 4) |
 | `chambolle_pock(op, ...)` | — | Primal-dual (Phase 4) |
-| `call_bart(name, *inputs, **flags)` | any | Generic entry point |
-| `make_tool(name)` | any | Factory for thin wrappers |
 | `*` (generated) | all 100+ | Auto-generated at build time |
 
 ### `bartorch.ops`

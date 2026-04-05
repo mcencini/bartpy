@@ -30,6 +30,7 @@ from __future__ import annotations
 import importlib
 import math
 import os
+
 import pytest
 
 
@@ -74,7 +75,9 @@ def test_finufft_wrap_symbols():
     import ctypes
     import glob
     import pathlib
+
     import bartorch._bartorch_ext as ext  # noqa: F401
+
     import bartorch
     matches = glob.glob(str(pathlib.Path(bartorch.__file__).parent / "_bartorch_ext*.so"))
     if not matches:
@@ -94,6 +97,7 @@ def test_rolloff_wrap_symbols():
     import ctypes
     import glob
     import pathlib
+
     import bartorch
     matches = glob.glob(str(pathlib.Path(bartorch.__file__).parent / "_bartorch_ext*.so"))
     if not matches:
@@ -201,6 +205,7 @@ def test_adjointness_2d():
     Checks:  |⟨grid2H(x), y⟩ − ⟨x, grid2(y)⟩| / (‖x‖·‖y‖) < 1e-4
     """
     import torch
+
     import bartorch as bt
 
     torch.manual_seed(0)
@@ -243,6 +248,7 @@ def test_adjointness_2d():
 def test_adjointness_3d():
     """Adjointness of grid2 / grid2H for a 3-D Koosh-ball trajectory."""
     import torch
+
     import bartorch as bt
 
     torch.manual_seed(1)

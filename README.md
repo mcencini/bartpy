@@ -146,7 +146,6 @@ demonstrating the bartorch API:
 |---|---|
 | [`01_high_level_tools.ipynb`](examples/01_high_level_tools.ipynb) | High-level BART tools: phantom, FFT, ESPIRiT, PICS |
 | [`02_library_internals.ipynb`](examples/02_library_internals.ipynb) | BartContext hot path, `@bart_op` dtype handling, linop algebra |
-| [`phantom_demo.ipynb`](examples/phantom_demo.ipynb) | Basic phantom + PICS stub for quick orientation |
 
 The same notebooks are rendered in the
 [online documentation](https://mcencini.github.io/bartpy/examples/index.html)

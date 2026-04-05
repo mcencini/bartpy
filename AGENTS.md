@@ -119,7 +119,7 @@ bartpy/                           ← repository root
 ├── pyproject.toml
 ├── setup.py
 ├── .gitmodules
-└── agents.md                     ← this file
+└── AGENTS.md                     ← this file
 ```
 
 ---
@@ -235,9 +235,10 @@ python build_tools/gen_tools.py
 python build_tools/gen_tools.py --bart-src bart/src --out bartorch/tools/_generated.py
 ```
 
-If `bart/src/` is absent (submodule not initialised), the script falls back
-to a built-in list and generates minimal stubs.  Stubs are always a valid
-`bartorch.tools` API even without a full parse.
+If ``bart/src/`` is absent (submodule not initialised), the script aborts
+with an error.  Initialise the submodule first::
+
+    git submodule update --init --recursive
 
 ### 4.6 BartContext (thread-local session)
 

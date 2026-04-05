@@ -24,8 +24,10 @@ From the repository root::
 ``--bart-src`` defaults to ``bart/src`` relative to the repository root.
 ``--out`` defaults to ``bartorch/tools/_generated.py``.
 
-If ``bart/src`` is absent (submodule not initialised), the script falls back
-to a built-in minimal list and generates generic stubs.
+If ``bart/src`` is absent the script aborts with an error — initialise the
+submodule first::
+
+    git submodule update --init --recursive
 
 Generated file
 --------------
@@ -509,17 +511,16 @@ def _generate_stub(name: str) -> str:
 def _generate_file(out_path: Path, bart_src: Path | None) -> None:
     """Write *out_path* with one generated function per BART tool."""
 
-    if bart_src is not None and bart_src.is_dir():
-        tools = _discover_tools(bart_src)
-        have_source = True
-        print(f"Found {len(tools)} tools in {bart_src}")
-    else:
-        if bart_src is not None:
-            print(f"WARNING: bart/src not found at {bart_src}. Falling back to built-in list.")
-        else:
-            print("No bart/src path provided. Using built-in list.")
-        tools = _FALLBACK_TOOLS
-        have_source = False
+    if bart_src is None or not bart_src.is_dir():
+        msg = (
+            f"BART source directory not found: {bart_src}\n"
+            "Initialise the git submodule first:\n"
+            "    git submodule update --init --recursive"
+        )
+        raise SystemExit(f"ERROR: {msg}")
+
+    tools = _discover_tools(bart_src)
+    print(f"Found {len(tools)} tools in {bart_src}")
 
     # Filter out skipped tools (hand-written wrappers) and internal tools
     _INTERNAL = {"bart", "bench", "version"}
@@ -549,7 +550,7 @@ def _generate_file(out_path: Path, bart_src: Path | None) -> None:
         )
     sphinx_toc = "\n".join(autosummary_sections)
 
-    source_note = "yes (bart/src/ parsed)" if have_source else "no (fallback stubs)"
+    source_note = "yes (bart/src/ parsed)"
     header = (
         '"""bartorch.tools._generated — Auto-generated BART CLI wrappers.\n'
         "\n"
@@ -586,15 +587,14 @@ def _generate_file(out_path: Path, bart_src: Path | None) -> None:
         safe_name = name.replace("-", "_")
         exported.append(safe_name)
 
-        if have_source:
-            src_path = bart_src / (name + ".c")
-            if src_path.exists():
-                try:
-                    info = _parse_tool_source(name, src_path)
-                    func_lines.append(_generate_func(info))
-                    continue
-                except Exception as exc:
-                    print(f"  WARNING: parse error for {name}: {exc}; using stub.")
+        src_path = bart_src / (name + ".c")
+        if src_path.exists():
+            try:
+                info = _parse_tool_source(name, src_path)
+                func_lines.append(_generate_func(info))
+                continue
+            except Exception as exc:
+                print(f"  WARNING: parse error for {name}: {exc}; using stub.")
 
         func_lines.append(_generate_stub(name))
 

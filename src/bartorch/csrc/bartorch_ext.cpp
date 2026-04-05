@@ -41,6 +41,12 @@ extern "C" {
 
 #include "tensor_bridge.hpp"
 
+// Torch-prior registry functions — implemented in torch_prior.cpp.
+void bartorch_register_torch_prior(const std::string& name,
+                                   pybind11::object   fn,
+                                   std::vector<long>  dims);
+void bartorch_unregister_torch_prior(const std::string& name);
+
 #ifdef USE_CUDA
 #include "cuda/cuda_bridge.hpp"
 #endif
@@ -90,6 +96,20 @@ PYBIND11_MODULE(_bartorch_ext, m) {
           py::arg("output_dims"),
           py::arg("kwargs"),
           "Generic zero-copy BART command dispatcher (hot path).");
+
+    m.def("register_torch_prior",
+          &bartorch_register_torch_prior,
+          py::arg("name"),
+          py::arg("fn"),
+          py::arg("dims"),
+          "Register a Python denoiser callable in the global torch-prior "
+          "registry so that __wrap_nlop_tf_create can find it when BART "
+          "processes -R TF:{bartorch://<name>}:<lambda>.");
+
+    m.def("unregister_torch_prior",
+          &bartorch_unregister_torch_prior,
+          py::arg("name"),
+          "Remove a previously registered torch prior from the registry.");
 
     // Named op bindings will be added here as the implementation matures.
     // Example (not yet active):

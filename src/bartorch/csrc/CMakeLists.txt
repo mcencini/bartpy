@@ -400,6 +400,7 @@ endif()
 pybind11_add_module(_bartorch_ext
     bartorch_ext.cpp
     bart_ops.cpp
+    torch_prior.cpp
 )
 target_include_directories(_bartorch_ext PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}
@@ -417,10 +418,7 @@ if(BARTORCH_USE_FINUFFT)
     target_link_libraries(_bartorch_ext PRIVATE finufft)
     target_compile_definitions(_bartorch_ext PRIVATE BARTORCH_USE_FINUFFT)
 
-    # Redirect all calls to grid2/grid2H and rolloff_correction/apply_rolloff_correction*
-    # (from BART's noncart/grid.c and noncart/nufft.c) to the __wrap_* implementations
-    # in finufft_grid.cpp at link time.
-    # Linux (GNU ld): --wrap; macOS (Apple ld): -wrap,_symbol.
+    # Redirect grid2/grid2H and rolloff_correction* to finufft_grid.cpp impls.
     if(APPLE)
         target_link_options(_bartorch_ext PRIVATE
             -Wl,-wrap,_grid2
@@ -440,6 +438,26 @@ if(BARTORCH_USE_FINUFFT)
     endif()
     message(STATUS "FINUFFT grid replacement: --wrap,grid2 --wrap,grid2H --wrap,rolloff_correction --wrap,apply_rolloff_correction --wrap,apply_rolloff_correction2 active")
 endif()
+
+# ---------------------------------------------------------------------------
+# torch_prior.cpp — --wrap nlop_tf_create for Python denoiser priors.
+#
+# torch_prior.cpp is always compiled (already listed in pybind11_add_module).
+# We always add --wrap nlop_tf_create so __wrap_nlop_tf_create intercepts
+# every call to nlop_tf_create() inside the binary.  Paths that do NOT start
+# with "bartorch://" fall through to __real_nlop_tf_create (the original BART
+# TF implementation), which will error gracefully if TF support is absent.
+# ---------------------------------------------------------------------------
+if(APPLE)
+    target_link_options(_bartorch_ext PRIVATE
+        -Wl,-wrap,_nlop_tf_create
+    )
+else()
+    target_link_options(_bartorch_ext PRIVATE
+        -Wl,--wrap,nlop_tf_create
+    )
+endif()
+message(STATUS "Torch prior: --wrap,nlop_tf_create active")
 
 if(USE_CUDA)
     target_sources(_bartorch_ext PRIVATE cuda/cuda_bridge.hpp)

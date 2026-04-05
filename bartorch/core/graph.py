@@ -85,15 +85,15 @@ def dispatch(
 
     Parameters
     ----------
-    op_name :
+    op_name:
         BART tool name (e.g. ``"fft"``).
-    inputs :
+    inputs:
         Positional array inputs.  Must be ``torch.complex64`` tensors —
         normalisation is performed upstream by
         :func:`~bartorch.core.tensor.bart_op`.
-    output_dims :
+    output_dims:
         Expected output shape, or ``None`` to infer at runtime.
-    **kwargs :
+    **kwargs:
         Flag / scalar arguments forwarded to the BART command string.
         Boolean ``True`` values produce bare flags; numeric or string values
         produce flag-value pairs.  ``None`` and ``False`` are ignored.

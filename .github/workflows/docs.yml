@@ -33,8 +33,9 @@ env:
 jobs:
   # -------------------------------------------------------------------------
   # Job 1: validate docs build locally (runs on every PR and push)
-  # Notebooks are NOT executed (nbsphinx_execute='never') so the pure-Python
-  # package is sufficient — no C++ extension or system libs required.
+  # The C++ extension is compiled so that notebooks execute with a functional
+  # bartorch installation and cell outputs (or inline tracebacks from the
+  # Phase-1 stub) are rendered in the HTML docs.
   # -------------------------------------------------------------------------
   build-docs:
     name: Build Sphinx docs
@@ -42,6 +43,8 @@ jobs:
 
     steps:
       - uses: actions/checkout@v4
+        with:
+          submodules: recursive
 
       - uses: actions/setup-python@v5
         with:
@@ -49,15 +52,16 @@ jobs:
           cache: pip
 
       - name: Install system dependencies
-        run: sudo apt-get install -y pandoc
+        run: sudo apt-get install -y cmake pandoc
 
-      - name: Install Python build dependencies
+      - name: Install Python build dependencies (MKL provides BLAS + FFTW3)
         run: |
           pip install scikit-build-core pybind11
           pip install torch --index-url https://download.pytorch.org/whl/cpu
+          pip install mkl mkl-include intel-openmp
 
-      - name: Build and install bartorch (pure-Python, no C++ extension)
-        run: BARTORCH_SKIP_EXT=1 pip install -e ".[docs]" --no-build-isolation
+      - name: Build and install bartorch (compiles C++ extension with BART)
+        run: pip install -e ".[docs]" --no-build-isolation
 
       - name: Strip pre-committed notebook outputs
         # Clears any stale cell outputs committed to the repo so that

@@ -8,13 +8,7 @@ Wraps BART's calibration and parallel-imaging compressed-sensing commands:
 
 All three functions expose the **full BART CLI API** through their keyword
 arguments.  Named parameters cover the most commonly used flags; anything
-else can be forwarded as ``**extra_flags`` (keyword name = BART flag letter,
-value = flag argument or ``True`` for bare flags).
-
-BART flag reference
--------------------
-The mapping from Python keyword to BART flag is direct: ``r=0.01`` → ``-r
-0.01``, ``R="W:7:0:0.001"`` → ``-R W:7:0:0.001``, ``e=True`` → ``-e``.
+else can be forwarded as ``**extra_flags``.
 """
 
 from __future__ import annotations
@@ -46,6 +40,10 @@ def ecalib(
 
     ESPIRiT computes sensitivity maps directly from the auto-calibration signal
     (ACS) region of k-space by eigen-decomposition of a calibration matrix.
+
+    .. note::
+        **CUDA:** CPU only.  CUDA tensors are automatically moved to CPU before
+        dispatch and returned to the original device.
 
     Parameters
     ----------
@@ -111,6 +109,10 @@ def caldir(
     A simpler, faster alternative to :func:`ecalib` that computes sensitivity
     maps by direct Fourier-space operations on the ACS region.
 
+    .. note::
+        **CUDA:** CPU only.  CUDA tensors are automatically moved to CPU before
+        dispatch and returned to the original device.
+
     Parameters
     ----------
     kspace : torch.Tensor
@@ -134,6 +136,58 @@ def caldir(
     return dispatch("caldir", [kspace], None, r=calib_size, **extra_flags)
 
 
+# ---------------------------------------------------------------------------
+# PICS regularisation helpers
+# ---------------------------------------------------------------------------
+
+_R_GUIDE = """\
+The ``-R`` flag selects a regulariser and is the primary way to configure the
+compressed-sensing penalty in PICS.  It uses the syntax::
+
+    "<type>:<transform_flags>:<joint_dims>:<lambda>"
+
+**type** selects the penalty:
+
+* ``W`` — Wavelet (ℓ₁-Wavelet)
+* ``T`` — Total Variation (TV)
+* ``L`` — Locally Low-Rank (LLR)
+* ``B`` — Block-wise Low-Rank
+* ``N`` — Nuclear-norm Low-Rank
+
+**transform_flags** is a BART bitmask of the axes to which the transform
+is applied.  Use :func:`bartorch.utils.flags.axes_to_flags` to compute it
+from C-order Python axis indices.
+
+Common values for a ``(coils, ny, nx)`` k-space (3-D, C-order):
+
+* ``7``  — all three spatial axes (read + phase1 + phase2 in BART)
+* ``3``  — last two axes only (phase1 + read)
+* ``4``  — first axis only (coils / z)
+
+**joint_dims** selects which additional dimensions are processed jointly
+(e.g. for temporal or multi-contrast data); ``0`` = no joint processing.
+
+**lambda** is the regularisation strength (float > 0; larger = more
+regularisation).
+
+Multiple regularisers can be stacked by passing a list to ``R``.
+
+Examples
+--------
+Single wavelet::
+
+    pics(kspace, sens, R="W:7:0:0.005")
+
+TV + wavelet::
+
+    pics(kspace, sens, R=["T:7:0:0.002", "W:7:0:0.005"])
+
+L1-shorthand (equivalent to ``R="W:7:0:lambda_"``)::
+
+    pics(kspace, sens, lambda_=0.01, l1=True)
+"""
+
+
 @bart_op
 def pics(
     kspace: torch.Tensor,
@@ -141,7 +195,7 @@ def pics(
     *,
     # Regularisation
     lambda_: float | None = None,
-    R: str | None = None,
+    R: list[str] | str | None = None,
     l1: bool = False,
     l2: bool = False,
     # Solver
@@ -166,6 +220,11 @@ def pics(
     Iteratively reconstructs an image from under-sampled k-space data using
     sensitivity encoding and compressed-sensing regularisation.
 
+    .. note::
+        **CUDA:** GPU-capable when compiled with ``USE_CUDA=ON`` (``gpu=True``).
+        When ``gpu=False`` (default), CUDA tensors are automatically moved to
+        CPU before dispatch and returned to the original device.
+
     Parameters
     ----------
     kspace : torch.Tensor
@@ -180,12 +239,10 @@ def pics(
     lambda_ : float, optional
         Regularisation strength λ (``-r``).  Used with ``-l1``/``-l2`` or as
         the default lambda for ``-R`` specs.
-    R : str, optional
-        Full BART regularisation specification (``-R``), e.g.
-        ``"W:7:0:0.001"`` (wavelet), ``"T:7:0:0.001"`` (total variation),
-        ``"L:7:0:0.001"`` (locally low-rank).  Multiple regularisers can be
-        applied by calling ``pics`` with additional ``R`` flags via
-        *extra_flags*.
+    R : str or list of str, optional
+        BART regularisation specification(s) (``-R``).
+
+""" + _R_GUIDE + """
     l1 : bool, optional
         L1 regularisation flag (``-l1``).  Default ``False``.
     l2 : bool, optional
@@ -214,8 +271,8 @@ def pics(
     real : bool, optional
         Cast result to real-valued image (``-c``).  Default ``False``.
     gpu : bool, optional
-        Use GPU (``-g``).  Requires BART compiled with CUDA.  Default
-        ``False``.
+        Use GPU via BART's internal CUDA support (``-g``).  Requires BART
+        compiled with ``USE_CUDA=ON``.  Default ``False``.
 
     Advanced
     --------
@@ -236,37 +293,39 @@ def pics(
 
     Examples
     --------
-    Basic PICS with wavelet regularisation (``-R W:7:0:lambda``):
+    Basic PICS with wavelet regularisation:
 
     >>> import bartorch.tools as bt
     >>> kspace = bt.phantom([256, 256], kspace=True, ncoils=8)
     >>> sens   = bt.ecalib(kspace, calib_size=24)
     >>> reco   = bt.pics(kspace, sens, R="W:7:0:0.005")
 
-    L1-Wavelet shorthand (equivalent to ``R="W:7:0:lambda_"``):
+    Multiple regularisers (TV + wavelet):
+
+    >>> reco = bt.pics(kspace, sens, R=["T:7:0:0.002", "W:7:0:0.005"])
+
+    L1-Wavelet shorthand:
 
     >>> reco = bt.pics(kspace, sens, lambda_=0.01, l1=True)
 
-    Total variation + L2 Tikhonov, ADMM solver:
+    ADMM solver with TV:
 
-    >>> reco = bt.pics(kspace, sens, R="T:7:0:0.01", l2=True, lambda_=1e-4, admm=True)
-
-    Multiple regularisers — use ``**extra_flags`` with any BART flag name.
-    BART allows repeated ``-R`` specifications; pass them as differently-named
-    extra kwargs and note that the C++ layer receives them as separate flags:
-
-    >>> reco = bt.pics(kspace, sens, R="W:7:0:0.005", **{"R ": "T:7:0:0.002"})
-
-    Pass arbitrary BART flags directly:
-
-    >>> reco = bt.pics(kspace, sens, R="L:7:7:0.01", N=True, u=True)
+    >>> reco = bt.pics(kspace, sens, R="T:7:0:0.01", admm=True)
     """
+    # Normalise R: a single string or None stays as-is; a list produces
+    # multiple -R entries via the dispatch layer's list-flag expansion.
+    R_val: list[str] | str | None
+    if isinstance(R, list) and len(R) == 1:
+        R_val = R[0]
+    else:
+        R_val = R
+
     return dispatch(
         "pics",
         [kspace, sens],
         None,
         r=lambda_,
-        R=R,
+        R=R_val,
         l1=l1 or None,
         l2=l2 or None,
         i=iter_,

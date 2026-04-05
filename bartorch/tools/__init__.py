@@ -1,5 +1,4 @@
-"""
-bartorch.tools — BART CLI tool wrappers.
+"""bartorch.tools — BART CLI tool wrappers.
 
 Every function in this sub-package routes through
 :func:`bartorch.core.graph.dispatch`, which calls the embedded BART C++
@@ -10,17 +9,19 @@ results.
 Axis indices (C-order)
 ----------------------
 Where BART expects a bitmask to select axes, the Python wrappers accept a
-scalar axis index or a tuple of indices instead — including negative
-indices.  The conversion to BART's Fortran-order bitmask is handled
-transparently by :func:`bartorch.utils.flags.axes_to_flags`.
+scalar axis index or a tuple of indices instead — including negative indices.
+The conversion to BART's Fortran-order bitmask is handled transparently by
+:func:`bartorch.utils.flags.axes_to_flags`.
 
 Example: ``bt.fft(x, axes=(-1, -2))`` — 2-D FFT over the last two axes.
 
 Named tools
 -----------
-The following tools are explicitly wrapped with Pythonic APIs:
-``fft``, ``ifft``, ``phantom``, ``ecalib``, ``caldir``, ``pics``,
-``conjgrad``, ``ist``, ``fista``, ``irgnm``, ``chambolle_pock``.
+The following tools have hand-written Pythonic APIs:
+``ecalib``, ``caldir``, ``pics``.
+
+All other BART commands (100+) are exposed via auto-generated wrappers in
+:mod:`bartorch.tools._generated`.
 
 Generic access
 --------------
@@ -32,37 +33,22 @@ Any BART command can also be called via :func:`call_bart`::
 Auto-generated wrappers (build-time)
 -------------------------------------
 ``build_tools/gen_tools.py`` generates ``bartorch/tools/_generated.py`` at
-build time, providing thin wrappers for every BART CLI command (100+).  The
-generated module is loaded lazily below; it is absent in source trees that
-have not been built.
+build time, providing typed wrappers for every BART CLI command (100+).
 """
 
+from __future__ import annotations
+
 from bartorch.tools._dispatch import call_bart, make_tool
-from bartorch.tools.fft import fft, ifft
-from bartorch.tools.italgos import chambolle_pock, conjgrad, fista, irgnm, ist
-from bartorch.tools.phantom import phantom
 from bartorch.tools.pics import caldir, ecalib, pics
 
 __all__ = [
     # Generic entry point
     "call_bart",
     "make_tool",
-    # FFT / num
-    "fft",
-    "ifft",
-    # Simulation
-    "phantom",
-    # Calibration
+    # Calibration / reconstruction (hand-written)
     "ecalib",
     "caldir",
-    # Reconstruction
     "pics",
-    # Iterative algorithms
-    "conjgrad",
-    "ist",
-    "fista",
-    "irgnm",
-    "chambolle_pock",
 ]
 
 # Auto-generated wrappers (created at build time by build_tools/gen_tools.py).

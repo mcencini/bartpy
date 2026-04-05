@@ -390,6 +390,7 @@ pybind11_add_module(_bartorch_ext
     bartorch_ext.cpp
     bart_ops.cpp
     torch_prior.cpp
+    torch_prior_nlop.c
 )
 target_include_directories(_bartorch_ext PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}
@@ -429,13 +430,20 @@ if(BARTORCH_USE_FINUFFT)
 endif()
 
 # ---------------------------------------------------------------------------
-# torch_prior.cpp — --wrap nlop_tf_create for Python denoiser priors.
+# torch_prior.cpp + torch_prior_nlop.c — --wrap nlop_tf_create
 #
-# torch_prior.cpp is always compiled (already listed in pybind11_add_module).
-# We always add --wrap nlop_tf_create so __wrap_nlop_tf_create intercepts
-# every call to nlop_tf_create() inside the binary.  Paths that do NOT start
-# with "bartorch://" fall through to __real_nlop_tf_create (the original BART
-# TF implementation), which will error gracefully if TF support is absent.
+# torch_prior_nlop.c (pure C99) contains all BART nlop types and `complex float`
+# callbacks.  torch_prior.cpp (C++) contains the registry, pybind11 bindings,
+# and PyTorch tensor calls.  The split ensures no C99-only types (`complex float`,
+# `_Complex`) appear in C++ translation units, making the code portable to
+# GCC, Clang, and MSVC.
+#
+# Both files are already listed in pybind11_add_module above.
+# We always add --wrap nlop_tf_create so __wrap_nlop_tf_create (in
+# torch_prior_nlop.c) intercepts every call to nlop_tf_create() inside the
+# binary.  Paths that do NOT start with "bartorch://" fall through to
+# __real_nlop_tf_create (the original BART TF implementation), which will
+# error gracefully if TF support is absent.
 # ---------------------------------------------------------------------------
 if(APPLE)
     target_link_options(_bartorch_ext PRIVATE

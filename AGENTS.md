@@ -431,8 +431,8 @@ source modifications required.
    appends `R='TF:{bartorch://<name>}:<lambda>'` to the BART flags.
 3. `dispatch("pics", …)` → `bart_command("pics … -R TF:{bartorch://name}:lam")`
 4. BART's `optreg.c` TENFL case calls `nlop_tf_create("bartorch://name")`.
-5. `__wrap_nlop_tf_create` (in `torch_prior.cpp`) intercepts, looks up the
-   callable in `g_prior_registry`, creates `nlop_torch_prior_create(fn, dims)`.
+5. `__wrap_nlop_tf_create` (in `torch_prior_nlop.c`) intercepts, looks up the
+   entry in the C registry, creates `nlop_torch_prior_create(apply, cleanup, ctx, …)`.
 6. BART wraps the nlop in `prox_nlgrad_create(nlop, 1, 1.0, lambda, false)`.
 7. Every ADMM/IST iteration calls the proximal operator:
    - `nlop_apply` → GIL → `fn(x)` → `residual = x − D(x)` (cached)
@@ -466,12 +466,18 @@ bartorch kspace C-order: `(nc, [nz,] ny, nx)` with a singleton z-dim for 2-D.
 Fortran dims (reversed): `[nx, ny, nz, nc, 1, …]` — coil at Fortran dim 3.
 `img_dims` = Fortran ksp_dims with `dims[3] = 1` (coil zeroed).
 
-- [x] `src/bartorch/csrc/torch_prior.cpp`: global registry, `nlop_torch_prior_create`,
-  `__wrap_nlop_tf_create`
+- [x] `src/bartorch/csrc/torch_prior_nlop.h`: shared C/C++ interface (no `complex float`,
+  fully portable); `tp_apply_t` / `tp_cleanup_t` callback types; registry and factory decls
+- [x] `src/bartorch/csrc/torch_prior_nlop.c` (pure C99): `struct torch_prior_nlop_s`,
+  BART nlop callbacks (`torch_prior_fwd/der/adj/del`), `nlop_torch_prior_create`,
+  `tp_registry_insert/remove`, `__wrap_nlop_tf_create` — all `complex float` confined here
+- [x] `src/bartorch/csrc/torch_prior.cpp` (pure C++): `TorchPriorEntry` registry,
+  `cpp_prior_apply` / `cpp_prior_cleanup` (C-linkage callbacks into PyTorch/GIL),
+  `bartorch_register_torch_prior` / `bartorch_unregister_torch_prior` pybind11 bindings
 - [x] `src/bartorch/csrc/bartorch_ext.cpp`: `register_torch_prior` /
   `unregister_torch_prior` pybind11 bindings
-- [x] `src/bartorch/csrc/CMakeLists.txt`: `torch_prior.cpp` added; unconditional
-  `--wrap nlop_tf_create` linker flag (Linux + macOS)
+- [x] `src/bartorch/csrc/CMakeLists.txt`: `torch_prior.cpp` + `torch_prior_nlop.c` added;
+  unconditional `--wrap nlop_tf_create` linker flag (Linux + macOS)
 - [x] `src/bartorch/tools/_commands.py`: `pics()` extended with `torch_prior` +
   `torch_prior_lambda`; `_bart_img_dims_from_kspace` helper
 - [x] `tests/test_tools_pics.py`: Python-side tests for `_bart_img_dims_from_kspace`

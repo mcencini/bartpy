@@ -1,5 +1,17 @@
 /*
- * torch_prior.cpp — Plug-and-play PyTorch denoiser prior via --wrap nlop_tf_create.
+ * torch_prior.cpp — C++ side of the PyTorch denoiser prior for BART PICS.
+ *
+ * This file contains ONLY:
+ *   • The C++ prior registry (std::unordered_map keyed by name)
+ *   • The C-linkage denoiser callback `cpp_prior_apply` and its cleanup
+ *     `cpp_prior_cleanup` — these bridge torch_prior_nlop.c ↔ PyTorch/GIL
+ *   • pybind11 bindings: register_torch_prior / unregister_torch_prior
+ *
+ * All `complex float` usage and BART nlop types live exclusively in
+ * torch_prior_nlop.c (compiled as C99).  The interface between the two
+ * translation units is the plain-C API in torch_prior_nlop.h, which uses
+ * only `float*` (interleaved [re,im,...]) and opaque `void*` — no C99 or
+ * GCC-specific types, so this file builds cleanly on GCC, Clang, and MSVC.
  *
  * Strategy (identical to finufft_grid.cpp for grid2/grid2H):
  *
@@ -7,43 +19,34 @@
  *     Linux : -Wl,--wrap,nlop_tf_create
  *     macOS : -Wl,-wrap,_nlop_tf_create
  *   every call to nlop_tf_create() inside the linked binary is redirected to
- *   __wrap_nlop_tf_create().  When the path argument starts with
- *   "bartorch://", the function looks up a registered Python callable in a
- *   global C++ map and builds a custom BART nlop whose forward/adjoint steps
- *   invoke the denoiser through the CPython GIL.  All other paths fall through
- *   to __real_nlop_tf_create() — the original BART TF implementation (which
- *   will raise an error unless BART was compiled with TensorFlow support).
+ *   __wrap_nlop_tf_create() in torch_prior_nlop.c.  When the path argument
+ *   starts with "bartorch://", the function looks up the registry populated
+ *   by register_torch_prior() and returns a custom BART nlop whose
+ *   forward/adjoint steps invoke the Python denoiser via cpp_prior_apply.
  *
  * Usage from Python (via pics() in _commands.py):
  *
  *   1. Python calls _ext.register_torch_prior(name, fn, bart_img_dims).
  *   2. Python appends R='TF:{bartorch://name}:lambda' to the BART pics flags.
  *   3. BART's optreg.c TENFL case calls nlop_tf_create("bartorch://name").
- *   4. __wrap_nlop_tf_create intercepts, looks up the entry, returns our nlop.
+ *   4. __wrap_nlop_tf_create (torch_prior_nlop.c) intercepts, builds the nlop.
  *   5. BART's prox_nlgrad_create wraps the nlop in a proximal operator.
- *   6. BART's own ADMM/IST/FISTA loop calls the proximal operator each
- *      iteration, which calls nlop_apply / nlop_adjoint on our nlop, which
- *      in turn calls back into Python to run the denoiser.
+ *   6. Each ADMM/IST/FISTA iteration calls the proximal operator, which
+ *      calls nlop_apply on our nlop, which calls cpp_prior_apply, which
+ *      acquires the GIL and invokes the Python denoiser.
  *
- * Denoiser convention (no sigma, pure PnP):
+ * Denoiser convention (pure PnP, no sigma argument):
  *
- *   The Python callable has signature:  fn(x: torch.Tensor) -> torch.Tensor
- *   x is passed as a flat complex64 tensor with numel = prod(spatial_dims).
- *   The denoiser must return a tensor of the same shape and dtype.
+ *   fn : torch.Tensor (complex64, shape [numel]) → torch.Tensor (same shape)
  *
  * nlop semantics (grad_nlop=false, one gradient step):
  *
- *   forward(x)  → scalar:  ||x − D(x)||² / 2  (debug; also caches residual)
- *   adjoint(x, grad_scalar=1) → x − D(x)       (cached noise residual)
+ *   forward(x)  → ‖x − D(x)‖² / 2   (caches residual)
+ *   adjoint(s)  → s[0] · (x − D(x))  (returns scaled residual)
  *
- *   prox_nlgrad_create(nlop, steps=1, stepsize=1.0, lambda, false) computes:
- *     prox(z, mu) = z − mu·lambda · (z − D(z))
- *
- *   With lambda = 1 and mu = 1 (ADMM default rho = 1):
- *     prox(z) = D(z)   ✓  (standard PnP proximal denoiser)
- *
- *   Users control the effective denoising strength via torch_prior_lambda in
- *   bt.pics(..., torch_prior_lambda=<value>).
+ *   prox_nlgrad_create(nlop, steps=1, stepsize=1.0, lambda, false):
+ *     prox(z, mu) = z − mu·lambda·(z − D(z))
+ *   With lambda=1, mu=1 (ADMM rho=1):  prox(z) = D(z)  ✓
  */
 
 #include <Python.h>
@@ -57,229 +60,109 @@
 #include <pybind11/stl.h>
 #include <torch/torch.h>
 
-extern "C" {
-#include "misc/types.h"
-#include "misc/misc.h"
-#include "misc/mri.h"       /* DIMS */
-#include "num/multind.h"    /* md_calc_size, md_clear, md_alloc, md_free */
-#include "nlops/nlop.h"     /* nlop_create, nlop_data_t, … */
-}
-
-// misc/types.h defines `#define auto __auto_type` so that BART's C code can
-// use `auto` as a type-deduction keyword (GNU C extension).  C++ already has
-// `auto` as a language keyword, so we must undo that define immediately to
-// allow normal C++ `auto` throughout the rest of this translation unit.
-// The BART C macros (CAST_DOWN, CAST_UP, SET_TYPEID, …) use __typeof__ /
-// __extension__ directly, so they continue to work after the undef.
-#ifdef auto
-#  undef auto
-#endif
+/* Shared C/C++ interface — no complex float, no GCC-specific types. */
+#include "torch_prior_nlop.h"
 
 namespace py = pybind11;
 
-// ---------------------------------------------------------------------------
-// Global prior registry
-// ---------------------------------------------------------------------------
-
+/* ==========================================================================
+ * C++ prior entry
+ * ==========================================================================
+ *
+ * Heap-allocated; ownership is shared between the registry and the nlop:
+ *   • While pics() runs: the nlop holds a reference via tp_cleanup_t.
+ *   • After pics(): bartorch_unregister_torch_prior() cleans it up via the
+ *     registry's tp_registry_remove(), which calls cpp_prior_cleanup().
+ *
+ * Because the same entry can be referenced by both the registry and a live
+ * nlop, we use a simple reference count (no shared_ptr to avoid C++ ABI
+ * issues at the C boundary).
+ */
 struct TorchPriorEntry {
-    PyObject*         fn_obj; // borrowed-ref incremented on register
-    std::vector<long> dims;   // BART Fortran img_dims (DIMS=16 elements)
+    PyObject*         fn_obj;  /* Python callable — owned reference     */
+    std::vector<long> dims;    /* BART Fortran-order image dims (len 16) */
 };
 
-static std::unordered_map<std::string, TorchPriorEntry> g_prior_registry;
+/* ==========================================================================
+ * C-linkage callbacks invoked by torch_prior_nlop.c
+ * ==========================================================================
+ *
+ * cpp_prior_apply — called on every nlop forward pass.
+ *   ctx      : TorchPriorEntry*
+ *   numel    : number of complex samples
+ *   out      : OUTPUT — D(x), 2*numel interleaved floats
+ *   in       : INPUT  — image x, 2*numel interleaved floats
+ */
+extern "C" void cpp_prior_apply(void* ctx, long numel,
+                                float* out, const float* in)
+{
+    auto* entry = static_cast<TorchPriorEntry*>(ctx);
 
-/* Called from Python (pybind11 binding in bartorch_ext.cpp) before pics(). */
+    /* Wrap the input buffer as a complex64 tensor — zero copy. */
+    const auto opts = torch::TensorOptions().dtype(torch::kComplexFloat);
+    auto x_t = torch::from_blob(const_cast<float*>(in), {numel}, opts);
+
+    /* Call the Python denoiser under the GIL. */
+    torch::Tensor dx_t;
+    {
+        py::gil_scoped_acquire gil;
+        py::object fn = py::reinterpret_borrow<py::object>(entry->fn_obj);
+        dx_t = fn(x_t).cast<torch::Tensor>();
+    }
+
+    /* Ensure the result is contiguous complex64 on CPU. */
+    dx_t = dx_t.contiguous().to(torch::kComplexFloat).cpu();
+
+    /* Copy D(x) into the output buffer as interleaved floats. */
+    const float* dx_ptr =
+        reinterpret_cast<const float*>(dx_t.data_ptr<c10::complex<float>>());
+    std::memcpy(out, dx_ptr, static_cast<std::size_t>(2 * numel) * sizeof(float));
+}
+
+/*
+ * cpp_prior_cleanup — called by torch_prior_nlop.c when the entry is freed
+ * (either from tp_registry_remove or from torch_prior_del).
+ */
+extern "C" void cpp_prior_cleanup(void* ctx)
+{
+    auto* entry = static_cast<TorchPriorEntry*>(ctx);
+    {
+        py::gil_scoped_acquire gil;
+        Py_DECREF(entry->fn_obj);
+    }
+    delete entry;
+}
+
+/* ==========================================================================
+ * pybind11 bindings — called from _commands.py before / after pics()
+ * ========================================================================== */
+
+/*
+ * Register a Python denoiser callable with the given name and image dims.
+ * Must be called before the BART pics command runs.
+ */
 void bartorch_register_torch_prior(const std::string& name,
                                    py::object        fn,
                                    std::vector<long> dims)
 {
-    PyObject* obj = fn.ptr();
-    Py_INCREF(obj);
-    g_prior_registry[name] = { obj, std::move(dims) };
+    auto* entry = new TorchPriorEntry{ fn.ptr(), std::move(dims) };
+    Py_INCREF(entry->fn_obj);
+
+    tp_registry_insert(name.c_str(),
+                       cpp_prior_apply,
+                       cpp_prior_cleanup,
+                       entry,
+                       static_cast<int>(entry->dims.size()),
+                       entry->dims.data());
 }
 
-/* Called from Python (pybind11 binding) after pics() returns / on error. */
+/*
+ * Remove the named prior from the registry.  The cleanup callback is
+ * invoked by tp_registry_remove(), releasing the Python ref and freeing
+ * the TorchPriorEntry.
+ */
 void bartorch_unregister_torch_prior(const std::string& name)
 {
-    auto it = g_prior_registry.find(name);
-    if (it != g_prior_registry.end()) {
-        py::gil_scoped_acquire gil;
-        Py_DECREF(it->second.fn_obj);
-        g_prior_registry.erase(it);
-    }
+    tp_registry_remove(name.c_str());
 }
 
-// ---------------------------------------------------------------------------
-// BART nlop data structure
-// ---------------------------------------------------------------------------
-
-struct torch_prior_nlop_s {
-    nlop_data_t  super;    /* MUST be first — CAST_UP/CAST_DOWN rely on this */
-    PyObject*    fn_obj;   /* Python denoiser callable (reference owned here) */
-    int          N;        /* DIMS = 16                                        */
-    long         dims[16]; /* img_dims in BART Fortran order                   */
-    complex float* res;    /* cached residual x − D(x) from last forward call  */
-};
-
-DEF_TYPEID(torch_prior_nlop_s);
-
-/*
- * Forward: image → scalar
- * Calls D(x), stores residual x−D(x), returns ‖x−D(x)‖²/2.
- */
-static void torch_prior_fwd(const nlop_data_t* _data,
-                             complex float*       dst,  /* scalar (1 elem)  */
-                             const complex float* src)  /* image  (N elems) */
-{
-    auto* d = CAST_DOWN(torch_prior_nlop_s, _data);
-    const long numel = md_calc_size(d->N, d->dims);
-
-    if (nullptr == d->res)
-        d->res = (complex float*)md_alloc(d->N, d->dims, CFL_SIZE);
-
-    /* Wrap src as a flat complex64 torch::Tensor (zero-copy view). */
-    const auto opts = torch::TensorOptions().dtype(torch::kComplexFloat);
-    auto x_t = torch::from_blob(const_cast<complex float*>(src),
-                                 { numel }, opts);
-
-    /* Call Python denoiser — GIL must be held for pybind11 / CPython calls. */
-    torch::Tensor dx_t;
-    {
-        py::gil_scoped_acquire gil;
-        py::object py_fn = py::reinterpret_borrow<py::object>(d->fn_obj);
-        dx_t = py_fn(x_t).cast<torch::Tensor>();
-    }
-
-    dx_t = dx_t.contiguous().to(torch::kComplexFloat).cpu();
-
-    /* residual = x − D(x)  (stored for adjoint) */
-    const auto* dx_ptr =
-        reinterpret_cast<const complex float*>(
-            dx_t.data_ptr<c10::complex<float>>());
-    for (long i = 0; i < numel; ++i)
-        d->res[i] = src[i] - dx_ptr[i];
-
-    /* Scalar output = ‖residual‖²/2 — only used for BART debug logging. */
-    double acc = 0.0;
-    const auto* rp = reinterpret_cast<const float*>(d->res);
-    for (long i = 0; i < 2 * numel; ++i)
-        acc += (double)rp[i] * rp[i];
-    dst[0] = (complex float)(acc * 0.5);
-}
-
-/*
- * Forward derivative (linearised, domain → codomain).
- * Not used by prox_nlgrad with grad_nlop=false; set to zero.
- */
-static void torch_prior_der(const nlop_data_t* _data,
-                              int  /*o*/, int /*i*/,
-                              complex float*       dst,  /* scalar (codomain) */
-                              const complex float* /*src*/)
-{
-    (void)_data;
-    dst[0] = 0.f;
-}
-
-/*
- * Adjoint (codomain → domain): returns scale * cached residual x − D(x).
- * In prox_nlgrad, src[0] = {1.0}, so dst = residual = x − D(x).
- */
-static void torch_prior_adj(const nlop_data_t* _data,
-                              int  /*o*/, int /*i*/,
-                              complex float*       dst,  /* image  (domain)   */
-                              const complex float* src)  /* scalar (codomain) */
-{
-    auto* d = CAST_DOWN(torch_prior_nlop_s, _data);
-    const long numel = md_calc_size(d->N, d->dims);
-
-    if (nullptr == d->res) {
-        md_clear(d->N, d->dims, dst, CFL_SIZE);
-        return;
-    }
-
-    const complex float scale = src[0];
-    for (long i = 0; i < numel; ++i)
-        dst[i] = scale * d->res[i];
-}
-
-/* Destructor */
-static void torch_prior_del(const nlop_data_t* _data)
-{
-    auto* d = CAST_DOWN(torch_prior_nlop_s, _data);
-    {
-        py::gil_scoped_acquire gil;
-        Py_DECREF(d->fn_obj);
-    }
-    md_free(d->res);
-    xfree(d);
-}
-
-/*
- * Factory: allocate and return a BART nlop backed by a Python denoiser.
- */
-static const struct nlop_s*
-nlop_torch_prior_create(PyObject* fn_obj, const std::vector<long>& dims)
-{
-    // PTR_ALLOC uses an implicit void*→T* cast that is only valid in C, not C++.
-    // Use an explicit static_cast instead; SET_TYPEID initialises the TYPEID
-    // field just as PTR_ALLOC + SET_TYPEID would.
-    auto* data = static_cast<struct torch_prior_nlop_s*>(
-        xmalloc(sizeof(struct torch_prior_nlop_s)));
-    SET_TYPEID(torch_prior_nlop_s, data);
-
-    {
-        py::gil_scoped_acquire gil;
-        Py_INCREF(fn_obj);
-    }
-    data->fn_obj = fn_obj;
-    data->N      = DIMS;
-    for (int i = 0; i < DIMS; ++i)
-        data->dims[i] = (i < (int)dims.size()) ? dims[i] : 1L;
-    data->res = nullptr;
-
-    /* Codomain: scalar (1 complex float). */
-    const long scalar_dims[1] = { 1L };
-
-    return nlop_create(
-        /*OD*/ 1,    scalar_dims,
-        /*ID*/ DIMS, data->dims,
-        CAST_UP(PTR_PASS(data)),
-        torch_prior_fwd,
-        torch_prior_der,
-        torch_prior_adj,
-        /*normal*/   nullptr,
-        /*norm_inv*/ nullptr,
-        torch_prior_del
-    );
-}
-
-// ---------------------------------------------------------------------------
-// --wrap nlop_tf_create
-// ---------------------------------------------------------------------------
-
-/*
- * Declare the original symbol.  The linker, when given --wrap,nlop_tf_create
- * (Linux) or -wrap,_nlop_tf_create (macOS), renames the original function
- * body to __real_nlop_tf_create so we can fall through to it for non-bartorch
- * paths.
- */
-extern "C" const struct nlop_s* __real_nlop_tf_create(const char* path);
-
-extern "C" const struct nlop_s* __wrap_nlop_tf_create(const char* path)
-{
-    static constexpr char       kPrefix[]  = "bartorch://";
-    static constexpr std::size_t kPrefixLen = sizeof(kPrefix) - 1;
-
-    if (strncmp(path, kPrefix, (size_t)kPrefixLen) == 0) {
-        const std::string name(path + kPrefixLen);
-        auto it = g_prior_registry.find(name);
-        if (it == g_prior_registry.end())
-            error("bartorch: torch_prior '%s' not found in registry — "
-                  "was bt.pics() called with torch_prior= set?\n",
-                  name.c_str());
-        return nlop_torch_prior_create(it->second.fn_obj, it->second.dims);
-    }
-
-    /* Fall through to BART's real TF implementation. */
-    return __real_nlop_tf_create(path);
-}

@@ -6,6 +6,7 @@ project(bartorch_ext LANGUAGES C CXX)
 # ---------------------------------------------------------------------------
 option(USE_CUDA "Build with CUDA support" OFF)
 option(BARTORCH_SKIP_EXT "Skip building the C++ extension (pure-Python fallback)" OFF)
+option(BARTORCH_USE_FINUFFT "Replace BART's Kaiser-Bessel gridder with FINUFFT's optimised ES-kernel spreader" ON)
 
 if(DEFINED ENV{BARTORCH_SKIP_EXT} AND "$ENV{BARTORCH_SKIP_EXT}" STREQUAL "1")
     set(BARTORCH_SKIP_EXT ON)
@@ -152,6 +153,66 @@ message(STATUS "  headers : ${_mkl_include_dir}")
 message(STATUS "  runtime : ${_mkl_rt_lib}")
 
 # ---------------------------------------------------------------------------
+# FINUFFT — optimised multithreaded ES-kernel spreader/interpolator
+#
+# When BARTORCH_USE_FINUFFT is ON (the default), FINUFFT is built as a static
+# library from the finufft/ submodule and the final _bartorch_ext.so is linked
+# with  -Wl,--wrap,grid2  -Wl,--wrap,grid2H .  The linker then redirects every
+# call to grid2()/grid2H() (including those buried in noncart/nufft.c) to the
+# __wrap_grid2/__wrap_grid2H implementations in finufft_grid.cpp.
+#
+# MKL's FFTW3 compatibility layer (libmkl_rt.so) is used so that FINUFFT does
+# not need to download or compile its own FFTW.  MKL's fftw3.h lives in the
+# fftw/ subdirectory of the MKL include path (already found above).
+# ---------------------------------------------------------------------------
+if(BARTORCH_USE_FINUFFT)
+    set(_finufft_dir "${CMAKE_SOURCE_DIR}/../../finufft")
+    if(NOT IS_DIRECTORY "${_finufft_dir}")
+        message(WARNING
+            "BARTORCH_USE_FINUFFT=ON but finufft/ submodule not found at "
+            "${_finufft_dir}.\n"
+            "Run:  git submodule update --init --recursive\n"
+            "Disabling BARTORCH_USE_FINUFFT.")
+        set(BARTORCH_USE_FINUFFT OFF)
+    endif()
+endif()
+
+if(BARTORCH_USE_FINUFFT)
+    # ── FINUFFT build options ────────────────────────────────────────────────
+    # Disable everything we don't need to keep the build fast and slim.
+    set(FINUFFT_BUILD_TESTS    OFF CACHE BOOL "" FORCE)
+    set(FINUFFT_BUILD_EXAMPLES OFF CACHE BOOL "" FORCE)
+    set(FINUFFT_BUILD_FORTRAN  OFF CACHE BOOL "" FORCE)
+    set(FINUFFT_BUILD_MATLAB   OFF CACHE BOOL "" FORCE)
+    set(FINUFFT_BUILD_PYTHON   OFF CACHE BOOL "" FORCE)
+    set(FINUFFT_BUILD_DEVEL    OFF CACHE BOOL "" FORCE)
+    set(FINUFFT_ENABLE_INSTALL OFF CACHE BOOL "" FORCE)
+    set(FINUFFT_USE_CPU    ON  CACHE BOOL "" FORCE)
+    set(FINUFFT_USE_CUDA   OFF CACHE BOOL "" FORCE)   # cuFINUFFT handled separately
+    set(FINUFFT_STATIC_LINKING ON  CACHE BOOL "" FORCE)
+    set(FINUFFT_USE_DUCC0  OFF CACHE BOOL "" FORCE)   # use FFTW backend, not DUCC0
+    set(FINUFFT_USE_OPENMP ON  CACHE BOOL "" FORCE)   # multi-threaded spreading
+
+    # Tell FINUFFT to use MKL's FFTW3 compatibility library instead of downloading
+    # or probing the system for FFTW.  setupFFTW.cmake skips CPM/find_package(FFTW)
+    # for any value of FINUFFT_FFTW_LIBRARIES other than "DEFAULT" or "DOWNLOAD".
+    set(FINUFFT_FFTW_LIBRARIES "${_mkl_rt_lib}" CACHE STRING
+        "FFTW library used by FINUFFT (MKL FFTW3 compatibility layer)" FORCE)
+    set(FINUFFT_FFTW_SUFFIX "" CACHE STRING "" FORCE)   # no _threads/_omp suffix
+
+    # ── Build FINUFFT as a subproject ────────────────────────────────────────
+    add_subdirectory("${_finufft_dir}" finufft_build EXCLUDE_FROM_ALL)
+
+    # finufft_fftlibs is an INTERFACE library created by setupFFTW.cmake.
+    # Inject MKL's fftw/ include directory so that all FINUFFT compilation
+    # units that #include <fftw3.h> find MKL's compatibility header.
+    # This must come AFTER add_subdirectory so the target already exists.
+    target_include_directories(finufft_fftlibs INTERFACE "${FFTW3F_INCLUDE_DIR}")
+
+    message(STATUS "FINUFFT: enabled — MKL FFTW backend: ${_mkl_rt_lib}")
+endif()
+
+# ---------------------------------------------------------------------------
 # Generate version.inc — BART's Makefile normally creates this via
 # `git describe`.  We generate it here so it's available when building
 # only the subset of BART sources needed for the extension.
@@ -287,6 +348,10 @@ set(BART_SOURCES
     ${BART_SRC_DIR}/num/vptr.c
     ${BART_SRC_DIR}/num/delayed.c
     ${BART_SRC_DIR}/num/mpi_ops.c
+    # num — additional modules needed by noncart/grid.c and noncart/nufft.c
+    ${BART_SRC_DIR}/num/specfun.c
+    ${BART_SRC_DIR}/num/multiplace.c
+    ${BART_SRC_DIR}/num/vptr_fun.c
     # simu
     ${BART_SRC_DIR}/simu/phantom.c
     ${BART_SRC_DIR}/simu/shape.c
@@ -299,6 +364,8 @@ set(BART_SOURCES
     ${BART_SRC_DIR}/iter/iter2.c
     ${BART_SRC_DIR}/iter/prox.c
     ${BART_SRC_DIR}/iter/thresh.c
+    # noncart — KB gridding helpers (grid2/grid2H replaced by finufft_grid.cpp via --wrap)
+    ${BART_SRC_DIR}/noncart/grid.c
     # embed API + main dispatcher
     ${BART_SRC_DIR}/main.c
     ${BART_SRC_DIR}/bart.c
@@ -340,6 +407,39 @@ target_include_directories(_bartorch_ext PRIVATE
 )
 target_link_libraries(_bartorch_ext PRIVATE bart_static ${TORCH_LIBRARIES})
 target_compile_definitions(_bartorch_ext PRIVATE ${BART_DEFS})
+
+if(BARTORCH_USE_FINUFFT)
+    # finufft_grid.cpp provides __wrap_grid2 / __wrap_grid2H.
+    # The FINUFFT include directory is propagated transitively through the
+    # finufft target, so no extra target_include_directories is needed here.
+    target_sources(_bartorch_ext PRIVATE finufft_grid.cpp)
+    target_compile_features(_bartorch_ext PRIVATE cxx_std_17)
+    target_link_libraries(_bartorch_ext PRIVATE finufft)
+    target_compile_definitions(_bartorch_ext PRIVATE BARTORCH_USE_FINUFFT)
+
+    # Redirect all calls to grid2/grid2H and rolloff_correction/apply_rolloff_correction*
+    # (from BART's noncart/grid.c and noncart/nufft.c) to the __wrap_* implementations
+    # in finufft_grid.cpp at link time.
+    # Linux (GNU ld): --wrap; macOS (Apple ld): -wrap,_symbol.
+    if(APPLE)
+        target_link_options(_bartorch_ext PRIVATE
+            -Wl,-wrap,_grid2
+            -Wl,-wrap,_grid2H
+            -Wl,-wrap,_rolloff_correction
+            -Wl,-wrap,_apply_rolloff_correction
+            -Wl,-wrap,_apply_rolloff_correction2
+        )
+    else()
+        target_link_options(_bartorch_ext PRIVATE
+            -Wl,--wrap,grid2
+            -Wl,--wrap,grid2H
+            -Wl,--wrap,rolloff_correction
+            -Wl,--wrap,apply_rolloff_correction
+            -Wl,--wrap,apply_rolloff_correction2
+        )
+    endif()
+    message(STATUS "FINUFFT grid replacement: --wrap,grid2 --wrap,grid2H --wrap,rolloff_correction --wrap,apply_rolloff_correction --wrap,apply_rolloff_correction2 active")
+endif()
 
 if(USE_CUDA)
     target_sources(_bartorch_ext PRIVATE cuda/cuda_bridge.hpp)

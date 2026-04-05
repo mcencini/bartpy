@@ -286,17 +286,64 @@ with bart_context():
 - **PyTorch integration:** self-detects `torch.utils.cmake_prefix_path`
 - **BART static lib:** compiled from selected source files (not the full suite)
 - **BLAS/FFT:** reuses PyTorch's bundled MKL / OpenBLAS / cuFFT
+- **FINUFFT:** statically linked from the `finufft/` submodule (see below)
 
 ### Minimal BART source set
 
 | Module | Purpose |
 |--------|---------|
 | `misc/` | io, mmio, memcfl, stream, debug, opts, utils |
-| `num/`  | multind, flpmath, fft, blas, vecops, rand |
+| `num/`  | multind, flpmath, fft, blas, vecops, rand, specfun, multiplace, vptr_fun |
 | `simu/` | phantom, shape |
 | `linops/` | linop, someops, fmac |
 | `iter/` | iter, iter2, prox, thresh |
+| `noncart/` | grid.c (KB helpers kept; grid2/grid2H replaced by FINUFFT at link time) |
 | embed   | bart_embed_api.c, main.c, bart.c |
+
+### FINUFFT silent grid replacement
+
+`src/bartorch/csrc/finufft_grid.cpp` provides `__wrap_grid2` and
+`__wrap_grid2H`.  The final `_bartorch_ext.so` is linked with:
+```
+-Wl,--wrap,grid2  -Wl,--wrap,grid2H   (Linux / GNU ld)
+-Wl,-wrap,_grid2  -Wl,-wrap,_grid2H   (macOS / Apple ld)
+```
+The GNU/Apple linker then redirects every call to `grid2()` / `grid2H()`
+(including those in `noncart/nufft.c`) to the FINUFFT-backed
+`__wrap_grid2` / `__wrap_grid2H`.  The original BART KB gridder symbols
+(`__real_grid2` / `__real_grid2H`) remain in the binary but are never called.
+
+FINUFFT is built as a **static library** from `finufft/` with:
+- FFTW backend: MKL's FFTW3 compatibility layer (`libmkl_rt.so`) — no FFTW
+  download needed.
+- OpenMP spreading parallelism enabled.
+- Tests, examples, Python, MATLAB, Fortran, DUCC0 — all disabled.
+
+CMake option: `BARTORCH_USE_FINUFFT` (default `ON`).  Set to `OFF` to fall
+back to BART's original KB gridder.
+
+#### Rolloff correction
+
+`finufft_grid.cpp` also wraps BART's three rolloff functions via `--wrap`:
+
+| Symbol wrapped | Purpose |
+|---|---|
+| `rolloff_correction` | Fill 3-D correction weight array |
+| `apply_rolloff_correction2` | Apply with strides + batch dims |
+| `apply_rolloff_correction` | Contiguous delegate |
+
+The replacement computes the Fourier transform of FINUFFT's ES kernel:
+
+```
+hat_phi(ξ) = 2 · ∫₀^{J/2} exp(β · √(1 − (x/J/2)²)) · cos(2π·ξ·x) dx
+```
+
+using a 256-point midpoint quadrature, and applies `1/hat_phi(ξ)` as the
+per-pixel deconvolution weight.  This exactly cancels the ES-kernel gain
+introduced by `__wrap_grid2` / `__wrap_grid2H`, giving a correct end-to-end
+NUFFT pipeline.  The kernel parameters (nspread=7, β=16.1 for tol=1e-6 and
+σ=2) are derived from FINUFFT's `setup_spreader` formula and hardcoded for
+efficiency; no FINUFFT internal headers are required.
 
 ### CUDA build
 
@@ -353,6 +400,22 @@ CMAKE_ARGS="-DUSE_CUDA=ON" pip install -e .
 - [x] `build_tools/gen_tools.py`
 - [x] `pyproject.toml`, `setup.py`
 - [x] Tests: context, tensor, cfl, linops, flags
+
+### Phase 0.5 — FINUFFT silent grid replacement ✅
+- [x] `finufft/` git submodule (FINUFFT v2.6.0-dev)
+- [x] `src/bartorch/csrc/finufft_grid.cpp`: `__wrap_grid2` / `__wrap_grid2H`
+  using FINUFFT type-1/2 `spreadinterponly=1`
+- [x] `src/bartorch/csrc/finufft_grid.cpp`: `__wrap_rolloff_correction` /
+  `__wrap_apply_rolloff_correction` / `__wrap_apply_rolloff_correction2` —
+  ES-kernel FT rolloff computed via 256-pt midpoint quadrature, matching the
+  FINUFFT spreading kernel used in `__wrap_grid2` / `__wrap_grid2H`
+- [x] CMakeLists.txt: FINUFFT subdirectory, MKL FFTW3 backend, `--wrap` linker
+  options for grid2/grid2H + rolloff, `BARTORCH_USE_FINUFFT` option
+- [x] `noncart/grid.c` + deps (`num/specfun.c`, `num/multiplace.c`,
+  `num/vptr_fun.c`) added to `BART_SOURCES`
+- [x] `tests/test_finufft_grid.py`: import + symbol checks, pure-Python ES
+  rolloff weight tests (numerical adjointness tests gated on Phase-1 `run()`)
+- [x] AGENTS.md §6 and §8 updated
 
 ### Phase 1 — C++ Extension Core
 - [ ] `tensor_bridge.hpp`: zero-copy `torch.Tensor` ↔ CFL with axis reversal

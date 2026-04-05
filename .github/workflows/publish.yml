@@ -45,16 +45,22 @@ jobs:
           python-version: "3.11"
 
       - name: Install build tools and C++ extension dependencies
+        # Using --no-isolation means python -m build will NOT auto-install
+        # [build-system].requires, so we install them explicitly here.
+        # mkl + mkl-include are declared in pyproject.toml [build-system].requires;
+        # torch CPU wheel from the WHL index does not bundle MKL.
         run: |
           sudo apt-get install -y cmake
           pip install build scikit-build-core pybind11
           pip install torch --index-url https://download.pytorch.org/whl/cpu
+          pip install mkl mkl-include
 
       - name: Build sdist and wheel (C++ extension compiled with BART)
         # scikit-build-core is the build backend declared in pyproject.toml.
-        # The BART and FINUFFT submodules are checked out above and the
-        # necessary build tools (cmake, MKL) are installed in the previous step.
-        run: python -m build
+        # --no-isolation reuses the pre-installed packages above (torch CPU,
+        # mkl) instead of creating a fresh isolated environment that would
+        # download the default PyPI torch (CUDA, 2 GB+).
+        run: python -m build --no-isolation
 
       - name: Store distribution artifacts
         uses: actions/upload-artifact@v4

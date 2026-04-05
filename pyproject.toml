@@ -2,6 +2,7 @@
 requires = [
     "scikit-build-core>=0.9",
     "torch",        # provides libtorch + cmake config at build time
+    "mkl",          # MKL runtime (libmkl_rt) — needed at cmake configure time
     "mkl-include",  # MKL compile-time headers (mkl_cblas.h, fftw/fftw3.h)
 ]
 build-backend = "scikit_build_core.build"

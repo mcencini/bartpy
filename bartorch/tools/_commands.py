@@ -9,6 +9,8 @@ mapping human-readable keyword names to the raw BART flag letters.
 
 The following commands are overridden:
 
+* :func:`phantom` — accepts positional ``dims`` and ergonomic ``kspace`` /
+  ``ncoils`` kwargs; delegates to :func:`_generated.phantom`.
 * :func:`fft` / :func:`ifft` — accept ``axes=`` (C-order indices) instead of
   a raw BART bitmask; ``inverse`` and ``unitary`` flags use full words.
 * :func:`ecalib` — maps ``calib_size``, ``maps``, ``threshold``, … to flags,
@@ -47,6 +49,59 @@ from bartorch.tools._generated import __all__ as _generated_all
 from bartorch.utils.flags import axes_to_flags
 
 __all__ = [*_generated_all, "ifft"]
+
+
+# ---------------------------------------------------------------------------
+# Phantom generation — positional dims + ergonomic kspace/ncoils kwargs
+# ---------------------------------------------------------------------------
+
+
+def phantom(
+    dims: list[int],
+    *,
+    kspace: bool = False,
+    ncoils: int | None = None,
+    **extra_flags: Any,
+) -> torch.Tensor:
+    """Generate a numerical Shepp-Logan phantom or coil-sensitivity phantom.
+
+    .. note::
+        **CUDA:** GPU-capable when BART is compiled with ``USE_CUDA=ON``
+        (pass ``g=True`` via ``**extra_flags`` to enable).
+
+    Parameters
+    ----------
+    dims : list of int
+        Output image dimensions (C-order), e.g. ``[256, 256]`` for a 2-D
+        phantom or ``[64, 64, 64]`` for a 3-D phantom.  Passed to
+        ``output_dims`` of :func:`_generated.phantom`.
+    kspace : bool, optional
+        Return k-space instead of image-domain data (``-k``).
+        Default ``False``.
+    ncoils : int, optional
+        Generate *ncoils* coil-sensitivity-weighted copies (``-s``).
+        ``None`` → single coil (BART default).
+    **extra_flags :
+        Any additional BART ``phantom`` flags forwarded directly (e.g.
+        ``flag_3=True`` for 3-D simulation, ``g=2`` to select a geometry).
+
+    Returns
+    -------
+    torch.Tensor
+        Complex64 phantom array (C-order).
+
+    Examples
+    --------
+    >>> import bartorch.tools as bt
+    >>> ph = bt.phantom([256, 256])                          # 2-D Shepp-Logan
+    >>> ksp = bt.phantom([256, 256], kspace=True, ncoils=8)  # 8-coil k-space
+    """
+    return _generated.phantom(
+        output_dims=dims,
+        k=kspace or None,
+        s=ncoils,
+        **extra_flags,
+    )
 
 
 # ---------------------------------------------------------------------------

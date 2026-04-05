@@ -7,9 +7,7 @@ bartorch
 
    getting_started
    developers_guide
-   examples/01_high_level_tools
-   examples/02_library_internals
-   examples/phantom_demo
+   examples/index
    api/index
 
 Indices and tables

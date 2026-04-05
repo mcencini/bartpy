@@ -66,12 +66,10 @@ def test_finufft_wrap_symbols():
     binding for the C-level functions.
     """
     import ctypes
+    import glob
+    import pathlib
     import bartorch._bartorch_ext as ext  # noqa: F401
     import bartorch
-
-    so_path = bartorch.__file__.replace("__init__.py", "_bartorch_ext.so")
-    # On some platforms the suffix differs; find the .so by glob.
-    import glob, pathlib
     matches = glob.glob(str(pathlib.Path(bartorch.__file__).parent / "_bartorch_ext*.so"))
     if not matches:
         pytest.skip("Cannot locate _bartorch_ext.so to inspect symbols")
@@ -89,12 +87,18 @@ def _run_available() -> bool:
         return False
     try:
         import bartorch._bartorch_ext as ext
-        # run() currently raises NotImplementedError until Phase-1 is complete
-        import inspect
-        src = inspect.getsource(ext.run)
-        return "NotImplementedError" not in src and "not yet implemented" not in src
+        # Probe whether run() is wired up by attempting a call with dummy args.
+        # An unimplemented run() raises RuntimeError("not yet implemented").
+        # Any other outcome (including other exceptions from bad args) means
+        # the function IS available.
+        try:
+            ext.run("phantom", [], None, {})
+        except RuntimeError as e:
+            if "not yet implemented" in str(e):
+                return False
+        return True
     except Exception:
-        return False
+        return True
 
 
 skip_no_run = pytest.mark.skipif(

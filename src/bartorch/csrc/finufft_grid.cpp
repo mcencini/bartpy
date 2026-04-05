@@ -83,11 +83,13 @@
 #include <finufft.h>   // single + double precision public API
 
 // BART's grid_conf_s definition — must be included with C linkage.
-// grid.h uses _Bool (C99 built-in) which is not available in strict C++ mode;
-// we alias it to bool before including the header.
+// grid.h uses _Bool (C99 built-in) which is not a keyword in strict C++ mode
+// (it would be __Bool or just bool).  We provide a C++ typedef alias before
+// including the header.  GCC/Clang accept this as a harmless no-op on recent
+// toolchains where _Bool is already defined as a built-in.
 extern "C" {
 #ifndef _Bool
-typedef bool _Bool;  // C99 ↔ C++ compatibility shim
+typedef bool _Bool;  // C99 ↔ C++ compatibility alias for BART's grid.h
 #endif
 #include "noncart/grid.h"
 }
@@ -199,7 +201,13 @@ extern "C" void __wrap_grid2(
     finufft_opts opts;
     finufftf_default_opts(&opts);
     opts.spreadinterponly = 1;    // spreading only — no FFT, no deconvolution
-    opts.upsampfac        = 2.0;  // kernel width tuned for BART's os=2 regime
+    // upsampfac controls the ES kernel width (nspread), NOT the actual grid
+    // oversampling.  In spread-only mode FINUFFT writes directly to the
+    // n_modes-sized grid with no internal upsampling.  Setting 2.0 matches
+    // BART's default os=2.0 regime and yields ~10 spreading points for
+    // tol=1e-6.  conf->os is used separately in coordinate scaling (see
+    // extract_coords); the two parameters are independent.
+    opts.upsampfac        = 2.0;
     opts.debug            = 0;
     opts.showwarn         = 0;
 
@@ -220,8 +228,9 @@ extern "C" void __wrap_grid2(
     if (ier != 0) { finufftf_destroy(plan); return; }
 
     // type-1 execute: weights = src (NU k-space input), result = dst (grid output)
+    // FINUFFT's C API takes non-const pointers even for read-only operands;
+    // the const_cast is safe because for type-1 the weights array is only read.
     finufftf_execute(plan,
-        // const_cast is safe: FINUFFT reads src but API takes non-const pointer
         const_cast<FC*>(src),
         dst);
 
@@ -275,8 +284,8 @@ extern "C" void __wrap_grid2H(
 
     finufft_opts opts;
     finufftf_default_opts(&opts);
-    opts.spreadinterponly = 1;
-    opts.upsampfac        = 2.0;
+    opts.spreadinterponly = 1;    // interpolation step only — no FFT, no deconvolution
+    opts.upsampfac        = 2.0;  // same kernel design as grid2 (see comment there)
     opts.debug            = 0;
     opts.showwarn         = 0;
 
@@ -296,8 +305,8 @@ extern "C" void __wrap_grid2H(
     if (ier != 0) { finufftf_destroy(plan); return; }
 
     // type-2 execute: weights = dst (NU output, will be filled),
-    //                 result  = src (uniform input, will be read)
-    // const_cast on src: FINUFFT reads src but API takes non-const pointer.
+    //                 result  = src (uniform grid input, only read)
+    // const_cast on src: FINUFFT's C API takes non-const even for read-only operands.
     finufftf_execute(plan,
         dst,
         const_cast<FC*>(src));

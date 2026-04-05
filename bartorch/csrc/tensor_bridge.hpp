@@ -33,8 +33,14 @@
 #include <vector>
 #include <string>
 
+// bart_embed_api.h already guards itself with extern "C" and uses void* for
+// all pointer parameters, making it safe to include from C++.
+#include "bart_embed_api.h"
+
+// memcfl_unlink is not in bart_embed_api.h but we only need its name;
+// declare it directly using a C++-compatible signature (no VLA, no complex).
 extern "C" {
-#include "misc/memcfl.h"
+    void memcfl_unlink(const char* name);
 }
 
 namespace bartorch {
@@ -109,12 +115,13 @@ inline void register_input(const std::string& name, const torch::Tensor& t)
     auto dims_i64 = t.sizes().vec();
     std::vector<long> dims(dims_i64.begin(), dims_i64.end());
 
-    memcfl_register(
+    // register_mem_cfl_non_managed does not take ownership; BART will not free
+    // the pointer.  Equivalent to memcfl_register(..., managed=false).
+    register_mem_cfl_non_managed(
         name.c_str(),
-        static_cast<int>(dims.size()),
+        static_cast<unsigned int>(dims.size()),
         dims.data(),
-        reinterpret_cast<std::complex<float>*>(t.data_ptr()),
-        /* managed = */ false);
+        t.data_ptr());
 }
 
 /**

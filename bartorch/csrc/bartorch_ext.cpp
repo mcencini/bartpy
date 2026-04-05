@@ -36,7 +36,6 @@
 // The include path is set by CMakeLists.txt.
 extern "C" {
 #include "bart_embed_api.h"
-#include "misc/memcfl.h"
 #include "misc/misc.h"
 }
 

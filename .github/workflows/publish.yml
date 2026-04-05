@@ -44,16 +44,17 @@ jobs:
         with:
           python-version: "3.11"
 
-      - name: Install build tools
-        run: pip install build scikit-build-core
+      - name: Install build tools and C++ extension dependencies
+        run: |
+          sudo apt-get install -y cmake
+          pip install build scikit-build-core pybind11
+          pip install torch --index-url https://download.pytorch.org/whl/cpu
+          pip install mkl mkl-include intel-openmp
 
-      - name: Build sdist and wheel (pure-Python, no C++ ext)
-        # Use BARTORCH_SKIP_EXT=1 to build a pure-Python wheel that works
-        # without a C compiler.  The C++ extension wheel is built separately
-        # via cibuildwheel (see below, currently commented out).
+      - name: Build sdist and wheel (C++ extension compiled with BART)
         # scikit-build-core is the build backend declared in pyproject.toml.
-        env:
-          BARTORCH_SKIP_EXT: "1"
+        # The BART and FINUFFT submodules are checked out above and the
+        # necessary build tools (cmake, MKL) are installed in the previous step.
         run: python -m build
 
       - name: Store distribution artifacts

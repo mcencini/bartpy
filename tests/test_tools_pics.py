@@ -1,15 +1,15 @@
 """Tests for the torch_prior plug-and-play path in bartorch.tools.pics.
 
-These tests cover the Python-side logic that does not require the compiled
-C++ extension (_bartorch_ext):
+These tests cover:
 
 * ``_bart_img_dims_from_kspace`` — converts a kspace tensor shape to the
   BART Fortran-order ``img_dims`` array (length 16).
-* ``pics(..., torch_prior=fn)`` argument validation — raises ``ImportError``
-  when the extension is absent (BARTORCH_SKIP_EXT=1 in CI).
+* ``pics(..., torch_prior=fn)`` argument validation and R-flag merging logic.
+  The mocking-based tests exercise the Python layer independently of the
+  C++ dispatch stub.
 
-Tests that actually exercise the C++ ``__wrap_nlop_tf_create`` path require a
-built extension and are skipped in the pure-Python CI configuration.
+Tests that actually exercise the C++ ``__wrap_nlop_tf_create`` path are in
+``tests/test_ext.py``.
 """
 
 from __future__ import annotations
@@ -24,7 +24,7 @@ from bartorch.tools._commands import _bart_img_dims_from_kspace, pics
 __all__: list[str] = []
 
 _BART_DIMS = 16
-_COIL_DIM  = 3
+_COIL_DIM = 3
 
 
 # ---------------------------------------------------------------------------
@@ -61,7 +61,7 @@ class TestBartImgDimsFromKspace:
         assert dims[0] == nx
         assert dims[1] == ny
         assert dims[2] == nz
-        assert dims[_COIL_DIM] == 1   # coil zeroed
+        assert dims[_COIL_DIM] == 1  # coil zeroed
         assert all(d == 1 for d in dims[4:])
 
     def test_returns_list_of_ints(self):
@@ -124,7 +124,7 @@ class TestPicsTorchPriorValidation:
     @staticmethod
     def _make_inputs(nc=2, ny=8, nx=8):
         kspace = torch.zeros(nc, 1, ny, nx, dtype=torch.complex64)
-        sens   = torch.zeros(nc, 1, ny, nx, dtype=torch.complex64)
+        sens = torch.zeros(nc, 1, ny, nx, dtype=torch.complex64)
         return kspace, sens
 
     def test_torch_prior_without_ext_raises_import_error(self):
@@ -136,6 +136,7 @@ class TestPicsTorchPriorValidation:
     def test_torch_prior_lambda_default_is_float(self):
         """torch_prior_lambda has a sane numeric default (1.0)."""
         import inspect
+
         sig = inspect.signature(pics)
         default = sig.parameters["torch_prior_lambda"].default
         assert isinstance(default, float)
@@ -167,6 +168,7 @@ class TestPicsTorchPriorValidation:
         original_get_ext = None
         try:
             import bartorch.core.graph as graph_mod
+
             original_get_ext = graph_mod._get_ext
         except Exception:
             pytest.skip("bartorch.core.graph not importable")
@@ -183,9 +185,7 @@ class TestPicsTorchPriorValidation:
             cmds._generated.pics = fake_generated_pics
             kspace, sens = self._make_inputs()
             with pytest.raises(RuntimeError, match="sentinel"):
-                pics(kspace, sens,
-                     torch_prior=lambda x: x,
-                     torch_prior_lambda=0.05)
+                pics(kspace, sens, torch_prior=lambda x: x, torch_prior_lambda=0.05)
         finally:
             graph_mod._get_ext = original_get_ext
             cmds._generated.pics = original_generated_pics
@@ -207,8 +207,11 @@ class TestPicsTorchPriorValidation:
         import bartorch.tools._commands as cmds
 
         class FakeExt:
-            def register_torch_prior(self, *a): pass
-            def unregister_torch_prior(self, *a): pass
+            def register_torch_prior(self, *a):
+                pass
+
+            def unregister_torch_prior(self, *a):
+                pass
 
         call_args = {}
 
@@ -217,18 +220,15 @@ class TestPicsTorchPriorValidation:
             raise RuntimeError("sentinel")
 
         original_get_ext = graph_mod._get_ext
-        original_pics     = cmds._generated.pics
+        original_pics = cmds._generated.pics
         try:
-            graph_mod._get_ext   = lambda: FakeExt()
+            graph_mod._get_ext = lambda: FakeExt()
             cmds._generated.pics = fake_generated_pics
             kspace, sens = self._make_inputs()
             with pytest.raises(RuntimeError, match="sentinel"):
-                pics(kspace, sens,
-                     R="W:7:0:0.005",
-                     torch_prior=lambda x: x,
-                     torch_prior_lambda=1.0)
+                pics(kspace, sens, R="W:7:0:0.005", torch_prior=lambda x: x, torch_prior_lambda=1.0)
         finally:
-            graph_mod._get_ext   = original_get_ext
+            graph_mod._get_ext = original_get_ext
             cmds._generated.pics = original_pics
 
         r_val = call_args.get("R")
@@ -243,8 +243,11 @@ class TestPicsTorchPriorValidation:
         import bartorch.tools._commands as cmds
 
         class FakeExt:
-            def register_torch_prior(self, *a): pass
-            def unregister_torch_prior(self, *a): pass
+            def register_torch_prior(self, *a):
+                pass
+
+            def unregister_torch_prior(self, *a):
+                pass
 
         call_args = {}
 
@@ -253,18 +256,21 @@ class TestPicsTorchPriorValidation:
             raise RuntimeError("sentinel")
 
         original_get_ext = graph_mod._get_ext
-        original_pics     = cmds._generated.pics
+        original_pics = cmds._generated.pics
         try:
-            graph_mod._get_ext   = lambda: FakeExt()
+            graph_mod._get_ext = lambda: FakeExt()
             cmds._generated.pics = fake_generated_pics
             kspace, sens = self._make_inputs()
             with pytest.raises(RuntimeError, match="sentinel"):
-                pics(kspace, sens,
-                     R=["T:7:0:0.002", "W:7:0:0.005"],
-                     torch_prior=lambda x: x,
-                     torch_prior_lambda=1.0)
+                pics(
+                    kspace,
+                    sens,
+                    R=["T:7:0:0.002", "W:7:0:0.005"],
+                    torch_prior=lambda x: x,
+                    torch_prior_lambda=1.0,
+                )
         finally:
-            graph_mod._get_ext   = original_get_ext
+            graph_mod._get_ext = original_get_ext
             cmds._generated.pics = original_pics
 
         r_val = call_args.get("R")
@@ -282,24 +288,24 @@ class TestPicsTorchPriorValidation:
         class FakeExt:
             def register_torch_prior(self, name, *a):
                 names.append(name)
-            def unregister_torch_prior(self, *a): pass
+
+            def unregister_torch_prior(self, *a):
+                pass
 
         def fake_generated_pics(kspace, sens, **kwargs):
             raise RuntimeError("sentinel")
 
         original_get_ext = graph_mod._get_ext
-        original_pics     = cmds._generated.pics
+        original_pics = cmds._generated.pics
         try:
-            graph_mod._get_ext   = lambda: FakeExt()
+            graph_mod._get_ext = lambda: FakeExt()
             cmds._generated.pics = fake_generated_pics
             kspace, sens = self._make_inputs()
             for _ in range(3):
                 with pytest.raises(RuntimeError, match="sentinel"):
-                    pics(kspace, sens,
-                         torch_prior=lambda x: x,
-                         torch_prior_lambda=1.0)
+                    pics(kspace, sens, torch_prior=lambda x: x, torch_prior_lambda=1.0)
         finally:
-            graph_mod._get_ext   = original_get_ext
+            graph_mod._get_ext = original_get_ext
             cmds._generated.pics = original_pics
 
         assert len(names) == 3

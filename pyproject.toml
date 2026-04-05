@@ -55,7 +55,6 @@ docs = [
 # Build variants:
 #   pip install -e .                          # CPU (default)
 #   CMAKE_ARGS="-DUSE_CUDA=ON" pip install .  # CUDA
-#   BARTORCH_SKIP_EXT=1 pip install .         # pure-Python / subprocess only
 [tool.scikit-build]
 cmake.source-dir = "src/bartorch/csrc"
 cmake.build-type = "Release"
@@ -66,9 +65,6 @@ wheel.packages = ["src/bartorch"]
 wheel.install-dir = "bartorch"
 
 [tool.scikit-build.cmake.define]
-# Forward BARTORCH_SKIP_EXT env var to CMake so CMakeLists.txt can skip the
-# extension build when only the pure-Python fallback is needed.
-BARTORCH_SKIP_EXT = {env = "BARTORCH_SKIP_EXT", default = "OFF"}
 # Forward USE_CUDA so `CMAKE_ARGS="-DUSE_CUDA=ON"` still works, but the
 # cmake.define table also accepts the env var directly.
 USE_CUDA = {env = "BARTORCH_USE_CUDA", default = "OFF"}

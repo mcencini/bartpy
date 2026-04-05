@@ -394,8 +394,8 @@ TV + wavelet::
 # Torch-prior helper — BART img_dims from kspace tensor
 # ---------------------------------------------------------------------------
 
-_BART_DIMS = 16   # BART's DIMS constant
-_COIL_DIM  = 3    # BART's COIL_DIM (Fortran index of the coil dimension)
+_BART_DIMS = 16  # BART's DIMS constant
+_COIL_DIM = 3  # BART's COIL_DIM (Fortran index of the coil dimension)
 
 
 def _bart_img_dims_from_kspace(kspace: torch.Tensor) -> list[int]:
@@ -418,11 +418,11 @@ def _bart_img_dims_from_kspace(kspace: torch.Tensor) -> list[int]:
     list[int]
         ``img_dims`` as a length-16 list suitable for ``register_torch_prior``.
     """
-    shape = list(kspace.shape)            # C-order, e.g. [nc, nz, ny, nx]
-    fortran = list(reversed(shape))       # Fortran: [nx, ny, nz, nc]
+    shape = list(kspace.shape)  # C-order, e.g. [nc, nz, ny, nx]
+    fortran = list(reversed(shape))  # Fortran: [nx, ny, nz, nc]
     ksp_dims = fortran + [1] * (_BART_DIMS - len(fortran))
     img_dims = list(ksp_dims)
-    img_dims[_COIL_DIM] = 1              # zero out coil dimension
+    img_dims[_COIL_DIM] = 1  # zero out coil dimension
     return img_dims
 
 
@@ -476,10 +476,10 @@ def pics(
         every iteration.  BART's own ADMM / IST / FISTA loop runs unmodified;
         only the proximal step delegates to the Python denoiser.
 
-        Requires the C++ extension to be built (``BARTORCH_SKIP_EXT`` must not
-        be set).  The denoiser callable receives a **flat** ``complex64``
-        ``torch.Tensor`` of length ``prod(spatial_dims)`` and must return a
-        tensor of the same shape and dtype.  No ``sigma`` argument is passed.
+        Requires the compiled C++ extension.  The denoiser callable receives a
+        **flat** ``complex64`` ``torch.Tensor`` of length ``prod(spatial_dims)``
+        and must return a tensor of the same shape and dtype.  No ``sigma``
+        argument is passed.
 
     Parameters
     ----------
@@ -588,6 +588,7 @@ def pics(
         # ------------------------------------------------------------------
         # Import the C++ extension — raises ImportError when ext not built.
         from bartorch.core.graph import _get_ext
+
         ext = _get_ext()
 
         # Unique name for this call (supports concurrent calls safely).

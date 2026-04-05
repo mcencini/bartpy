@@ -11,7 +11,10 @@ env:
 
 jobs:
   # -------------------------------------------------------------------------
-  # Job 1: pure Python tests (fast, no C++ build, no BART submodule)
+  # Full test suite — builds the C++ extension (BART embedded) and runs all
+  # tests.  The extension is required.
+  # Uses MKL (from mkl/mkl-include Python packages) for BLAS and FFT so that
+  # no system-level libfftw3-dev or libopenblas-dev is required.
   # -------------------------------------------------------------------------
   tests:
     runs-on: ubuntu-latest
@@ -21,39 +24,12 @@ jobs:
 
     steps:
       - uses: actions/checkout@v4
-
-      - uses: actions/setup-python@v5
-        with:
-          python-version: ${{ matrix.python-version }}
-          cache: pip
-
-      - name: Install dependencies
-        run: pip install numpy torch pytest scikit-build-core
-
-      - name: Install package (skip C++ extension)
-        run: BARTORCH_SKIP_EXT=1 pip install -e . --no-build-isolation
-
-      - name: Run tests
-        run: pytest tests/ -v
-
-  # -------------------------------------------------------------------------
-  # Job 2: C++ extension build + smoke test
-  # Checks that the extension compiles and imports cleanly with BART embedded.
-  # Uses MKL (from mkl/mkl-include Python packages) for BLAS and FFT so that
-  # no system-level libfftw3-dev or libopenblas-dev is required.
-  # -------------------------------------------------------------------------
-  build-ext:
-    name: Build C++ extension (BART embedded)
-    runs-on: ubuntu-latest
-
-    steps:
-      - uses: actions/checkout@v4
         with:
           submodules: recursive
 
       - uses: actions/setup-python@v5
         with:
-          python-version: "3.11"
+          python-version: ${{ matrix.python-version }}
           cache: pip
 
       - name: Install system dependencies
@@ -68,5 +44,5 @@ jobs:
       - name: Build and install bartorch (compiles C++ extension with BART)
         run: pip install -e . --no-build-isolation
 
-      - name: Smoke test — run extension tests
-        run: pytest tests/test_ext.py -v
+      - name: Run full test suite
+        run: pytest tests/ -v

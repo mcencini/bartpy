@@ -5,18 +5,7 @@ project(bartorch_ext LANGUAGES C CXX)
 # Options
 # ---------------------------------------------------------------------------
 option(USE_CUDA "Build with CUDA support" OFF)
-option(BARTORCH_SKIP_EXT "Skip building the C++ extension (pure-Python fallback)" OFF)
 option(BARTORCH_USE_FINUFFT "Replace BART's Kaiser-Bessel gridder with FINUFFT's optimised ES-kernel spreader" ON)
-
-if(DEFINED ENV{BARTORCH_SKIP_EXT} AND "$ENV{BARTORCH_SKIP_EXT}" STREQUAL "1")
-    set(BARTORCH_SKIP_EXT ON)
-endif()
-
-if(BARTORCH_SKIP_EXT)
-    message(STATUS "BARTORCH_SKIP_EXT=1 — skipping C++ extension build")
-    return()
-endif()
-
 # ---------------------------------------------------------------------------
 # Find PyTorch (libtorch)
 # ---------------------------------------------------------------------------

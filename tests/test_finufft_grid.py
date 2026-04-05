@@ -1,9 +1,8 @@
 """tests/test_finufft_grid.py — tests for the FINUFFT-backed grid2/grid2H
 and ES-kernel rolloff correction.
 
-These tests are skipped when the C++ extension has not been built
-(BARTORCH_SKIP_EXT=1 or the module is absent), which is the normal state
-for the pure-Python CI job.
+Tests that require the C++ extension are skipped when the module cannot be
+imported (e.g. the submodule was not initialised during an editable install).
 
 When the extension IS available (i.e. compiled with BARTORCH_USE_FINUFFT=ON
 and noncart/grid.c in BART_SOURCES), the tests exercise the FINUFFT-backed
@@ -29,7 +28,6 @@ from __future__ import annotations
 
 import importlib
 import math
-import os
 
 import pytest
 
@@ -38,8 +36,6 @@ import pytest
 # Helper: skip if extension unavailable
 # ---------------------------------------------------------------------------
 def _ext_available() -> bool:
-    if os.environ.get("BARTORCH_SKIP_EXT", "0") == "1":
-        return False
     try:
         importlib.import_module("bartorch._bartorch_ext")
         return True
@@ -49,7 +45,7 @@ def _ext_available() -> bool:
 
 skip_no_ext = pytest.mark.skipif(
     not _ext_available(),
-    reason="C++ extension not built (BARTORCH_SKIP_EXT=1 or absent)",
+    reason="C++ extension not built",
 )
 
 

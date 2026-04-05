@@ -65,6 +65,16 @@ extern "C" {
 #include "nlops/nlop.h"     /* nlop_create, nlop_data_t, … */
 }
 
+// misc/types.h defines `#define auto __auto_type` so that BART's C code can
+// use `auto` as a type-deduction keyword (GNU C extension).  C++ already has
+// `auto` as a language keyword, so we must undo that define immediately to
+// allow normal C++ `auto` throughout the rest of this translation unit.
+// The BART C macros (CAST_DOWN, CAST_UP, SET_TYPEID, …) use __typeof__ /
+// __extension__ directly, so they continue to work after the undef.
+#ifdef auto
+#  undef auto
+#endif
+
 namespace py = pybind11;
 
 // ---------------------------------------------------------------------------
@@ -210,7 +220,11 @@ static void torch_prior_del(const nlop_data_t* _data)
 static const struct nlop_s*
 nlop_torch_prior_create(PyObject* fn_obj, const std::vector<long>& dims)
 {
-    PTR_ALLOC(struct torch_prior_nlop_s, data);
+    // PTR_ALLOC uses an implicit void*→T* cast that is only valid in C, not C++.
+    // Use an explicit static_cast instead; SET_TYPEID initialises the TYPEID
+    // field just as PTR_ALLOC + SET_TYPEID would.
+    auto* data = static_cast<struct torch_prior_nlop_s*>(
+        xmalloc(sizeof(struct torch_prior_nlop_s)));
     SET_TYPEID(torch_prior_nlop_s, data);
 
     {

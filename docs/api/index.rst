@@ -19,30 +19,28 @@ Core
    :undoc-members:
    :show-inheritance:
 
+Tools
+-----
+
+.. automodule:: bartorch.tools._generated
+   :members:
+   :undoc-members:
+   :show-inheritance:
+
+.. automodule:: bartorch.tools._commands
+   :members:
+   :undoc-members:
+   :show-inheritance:
+
+.. automodule:: bartorch.tools._dispatch
+   :members:
+   :undoc-members:
+   :show-inheritance:
+
 Ops
 ---
 
-.. automodule:: bartorch.ops.fft
-   :members:
-   :undoc-members:
-   :show-inheritance:
-
-.. automodule:: bartorch.ops.phantom
-   :members:
-   :undoc-members:
-   :show-inheritance:
-
-.. automodule:: bartorch.ops.pics
-   :members:
-   :undoc-members:
-   :show-inheritance:
-
 .. automodule:: bartorch.ops.linops
-   :members:
-   :undoc-members:
-   :show-inheritance:
-
-.. automodule:: bartorch.ops.italgos
    :members:
    :undoc-members:
    :show-inheritance:

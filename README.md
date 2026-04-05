@@ -115,8 +115,11 @@ python build_tools/gen_tools.py
 ```
 bartorch/
 ├── ops/           Internal types: BartLinop (operator algebra)
-├── tools/         User-facing tools: fft, phantom, ecalib, caldir, pics,
-│                  iterative algorithms, and auto-generated CLI wrappers
+├── tools/         User-facing BART CLI wrappers
+│   ├── _generated.py   Auto-generated wrappers for every BART command (~93),
+│   │                   parsed from BART source by build_tools/gen_tools.py
+│   ├── _commands.py    Pythonic overrides for ergonomic tools (ecalib, caldir, pics)
+│   └── _dispatch.py    call_bart() generic entry point + make_tool() factory
 ├── core/          Dispatch graph, BartContext, dtype normalisation
 ├── utils/         CFL read/write, axes_to_flags()
 └── csrc/          PyTorch C++ extension (_bartorch_ext)

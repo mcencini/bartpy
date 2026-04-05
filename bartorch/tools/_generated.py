@@ -66,6 +66,8 @@ Source-based generation: no (fallback stubs)
 .. autosummary::
    :nosignatures:
 
+   ecalib
+   caldir
    calmat
    ecaltwo
    estvar
@@ -163,10 +165,8 @@ Source-based generation: no (fallback stubs)
    :nosignatures:
 
    affinereg
-   caldir
    compress
    conv
-   ecalib
    estmat
    looklocker
    meanshape

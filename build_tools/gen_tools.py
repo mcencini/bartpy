@@ -60,7 +60,7 @@ _TOOL_CATEGORIES: dict[str, list[str]] = {
     "Sampling / Trajectories": ["traj", "poisson", "pattern", "upat", "estdelay"],
     "Non-Cartesian": ["nufft", "nufftbase"],
     "Coil Processing": ["coils", "cc", "ccapply", "walsh", "whiten", "rss"],
-    "Calibration": ["calmat", "ecaltwo", "estvar", "estdims"],
+    "Calibration": ["ecalib", "caldir", "calmat", "ecaltwo", "estvar", "estdims"],
     "Image Processing": [
         "resize", "reshape", "crop", "flip", "circshift", "transpose",
         "repmat", "join", "split", "extract", "squeeze", "flatten",

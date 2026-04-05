@@ -3,18 +3,18 @@
 The auto-generated layer in :mod:`bartorch.tools._generated` provides thin
 wrappers for every BART command.  This module imports that full suite and then
 re-defines a small set of commands that benefit from a richer Python API.
-The overrides delegate to their auto-generated counterparts — they are purely
-Pythonic argument-translation layers, not independent ``dispatch()`` callers.
+The overrides are purely Pythonic argument-translation layers — each one calls
+its auto-generated counterpart in :mod:`bartorch.tools._generated` after
+mapping human-readable keyword names to the raw BART flag letters.
 
 * :func:`ecalib` — maps Pythonic keyword names (``calib_size``, ``maps``, …)
-  to raw BART flags, then calls the generated :func:`_generated.ecalib`
+  to raw BART flags, then calls :func:`_generated.ecalib`
 * :func:`caldir` — maps ``calib_size`` to the BART ``-r`` flag, then calls
-  the generated :func:`_generated.caldir`
+  :func:`_generated.caldir`
 * :func:`pics`   — ``R`` accepts ``list[str]`` for multiple regularisers;
-  translates Pythonic kwargs to BART flags and calls the generated
-  :func:`_generated.pics`
+  translates Pythonic kwargs to BART flags and calls :func:`_generated.pics`
 
-All other commands are re-exported unchanged via ``from _generated import *``.
+All other commands are re-exported unchanged.
 The ``__init__.py`` imports from this module to build the public API.
 """
 
@@ -24,22 +24,16 @@ from typing import Any
 
 import torch
 
+# Module-level reference used by the override implementations below.
+from bartorch.tools import _generated
+
+# Re-export the full generated suite so that ``from _commands import *`` in
+# __init__.py exposes every BART command.  The manually-defined functions that
+# follow shadow the generated versions of the same name.
 from bartorch.tools._generated import *  # noqa: F401,F403
 from bartorch.tools._generated import __all__ as _generated_all
 
-# Private aliases so the override functions below can call the generated
-# versions without triggering Python's name-shadowing rules.
-from bartorch.tools._generated import caldir as _caldir_gen
-from bartorch.tools._generated import ecalib as _ecalib_gen
-from bartorch.tools._generated import pics as _pics_gen
-
-__all__ = [
-    *_generated_all,
-    # Overrides below replace the generated versions of the same name
-    "ecalib",
-    "caldir",
-    "pics",
-]
+__all__ = list(_generated_all)
 
 
 # ---------------------------------------------------------------------------
@@ -105,7 +99,7 @@ def ecalib(
     >>> kspace = bt.phantom([256, 256], kspace=True, ncoils=8)
     >>> sens = bt.ecalib(kspace, calib_size=24)
     """
-    return _ecalib_gen(
+    return _generated.ecalib(
         kspace,
         r=calib_size,
         m=maps,
@@ -158,7 +152,7 @@ def caldir(
     >>> kspace = bt.phantom([256, 256], kspace=True, ncoils=8)
     >>> sens = bt.caldir(kspace, calib_size=24)
     """
-    return _caldir_gen(kspace, r=calib_size, **extra_flags)
+    return _generated.caldir(kspace, r=calib_size, **extra_flags)
 
 
 # ---------------------------------------------------------------------------
@@ -341,7 +335,7 @@ def pics(
 
     >>> reco = bt.pics(kspace, sens, R="T:7:0:0.01", admm=True)
     """
-    return _pics_gen(
+    return _generated.pics(
         kspace,
         sens,
         r=lambda_,

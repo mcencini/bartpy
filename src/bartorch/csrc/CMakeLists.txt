@@ -65,86 +65,9 @@ endif()
 set(BART_SRC_DIR "${CMAKE_SOURCE_DIR}/../../../bart/src")
 
 # ---------------------------------------------------------------------------
-# BLAS + FFT: prefer MKL from Python packages over system libraries.
-#
-# Detection order:
-#  1. MKL from `mkl` + `mkl-include` Python packages.
-#     - Standard `pip install torch` pulls in `mkl` as a dependency, so this
-#       path works for all users of the default PyPI torch wheel.
-#     - `mkl-include` provides both cblas headers (mkl.h / mkl_cblas.h) and
-#       a full FFTW3 compatibility layer (fftw/fftw3.h → libmkl_rt at runtime).
-#     - `libmkl_rt.so` exports cblas_cgemm, fftwf_execute, fftwf_plan_*, …
-#     - Wheel size stays small: libmkl_rt.so is *not* bundled — it is already
-#       present on any machine where `torch` was installed via PyPI.
-#  2. System FFTW3f + system CBLAS fallback (for CPU-only torch wheels, conda
-#     environments, or developer containers without the `mkl` package).
-#     In production, a manylinux build + `auditwheel repair` will bundle these.
+# BART compile definitions — must be set BEFORE the MKL detection block
+# so that list(APPEND BART_DEFS ...) in the detection block takes effect.
 # ---------------------------------------------------------------------------
-
-set(_use_mkl FALSE)
-
-# Step 1 — look for mkl-include (headers) from the Python package
-execute_process(
-    COMMAND "${Python3_EXECUTABLE}" -c
-        "import importlib.metadata as m, pathlib
-try:
-    d = m.distribution('mkl-include')
-    inc = (pathlib.Path(str(d.locate_file('.'))) / '../../../include').resolve()
-    if (inc / 'mkl.h').exists(): print(str(inc))
-    else: exit(1)
-except Exception: exit(1)"
-    OUTPUT_VARIABLE _mkl_include_dir
-    OUTPUT_STRIP_TRAILING_WHITESPACE
-    RESULT_VARIABLE _mkl_inc_ret
-    ERROR_QUIET
-)
-
-# Step 2 — look for libmkl_rt from the Python `mkl` package
-execute_process(
-    COMMAND "${Python3_EXECUTABLE}" -c
-        "import importlib.metadata as m, pathlib, glob
-try:
-    d = m.distribution('mkl')
-    lib = (pathlib.Path(str(d.locate_file('.'))) / '../../../lib').resolve()
-    candidates = sorted(glob.glob(str(lib / 'libmkl_rt.so*')))
-    if candidates: print(candidates[0])
-    else: exit(1)
-except Exception: exit(1)"
-    OUTPUT_VARIABLE _mkl_rt_lib
-    OUTPUT_STRIP_TRAILING_WHITESPACE
-    RESULT_VARIABLE _mkl_rt_ret
-    ERROR_QUIET
-)
-
-if(_mkl_inc_ret EQUAL 0 AND _mkl_rt_ret EQUAL 0
-   AND _mkl_include_dir AND _mkl_rt_lib)
-    # MKL path: single library covers both BLAS and FFTW3 (compatibility layer)
-    set(CBLAS_INCLUDE_DIR  "${_mkl_include_dir}")
-    set(CBLAS_LIBRARY      "${_mkl_rt_lib}")
-    set(FFTW3F_INCLUDE_DIR "${_mkl_include_dir}/fftw")
-    set(FFTW3F_LIBRARY     "${_mkl_rt_lib}")
-    list(APPEND BART_DEFS USE_MKL)
-    set(_use_mkl TRUE)
-    message(STATUS "BLAS+FFT: MKL from Python packages")
-    message(STATUS "  headers : ${_mkl_include_dir}")
-    message(STATUS "  runtime : ${_mkl_rt_lib}")
-else()
-    # System fallback
-    find_library(FFTW3F_LIBRARY NAMES fftw3f REQUIRED
-        DOC "FFTW3 single-precision library (fallback when mkl package absent)")
-    find_path(FFTW3F_INCLUDE_DIR NAMES fftw3.h REQUIRED
-        DOC "FFTW3 include directory")
-    find_library(CBLAS_LIBRARY NAMES openblas blas REQUIRED
-        DOC "CBLAS/BLAS library (fallback when mkl package absent)")
-    find_path(CBLAS_INCLUDE_DIR NAMES cblas.h
-        PATH_SUFFIXES openblas
-        DOC "CBLAS include directory")
-    message(STATUS "BLAS+FFT: system libraries (mkl Python package not found)")
-    message(STATUS "  FFTW3f : ${FFTW3F_LIBRARY}  (headers: ${FFTW3F_INCLUDE_DIR})")
-    message(STATUS "  CBLAS  : ${CBLAS_LIBRARY}  (headers: ${CBLAS_INCLUDE_DIR})")
-endif()
-
-# BART compile definitions
 set(BART_DEFS
     BART_WITH_PYTHON         # suppress abort() → RuntimeError
     NO_MCU                   # skip microcontroller code
@@ -161,6 +84,72 @@ if(USE_CUDA)
     enable_language(CUDA)
     find_package(CUDAToolkit REQUIRED)
 endif()
+
+# ---------------------------------------------------------------------------
+# BLAS + FFT via MKL — required, no system-library fallback.
+#
+# MKL is always available when torch is installed via PyPI:
+#   - `pip install torch` (CPU wheel) pulls in `mkl` (libmkl_rt.so) and
+#     `intel-openmp` as runtime dependencies.
+#   - `pip install mkl-include` provides the compile-time headers
+#     (mkl_cblas.h, fftw/fftw3.h, …); add this to your build environment.
+#
+# All three packages install into the active Python environment's prefix so
+# we locate them by inspecting sys.prefix — no pip metadata required.
+#
+# libmkl_rt.so is a single shared library that implements:
+#   * CBLAS  (cblas_cgemm etc.)  via `USE_MKL` in BART's blas.c
+#   * FFTW3  (fftwf_execute etc.) via MKL's FFTW3 compatibility layer
+# Wheel size stays small: the .so lives in the user's Python environment
+# and is NOT bundled into the bartorch wheel.
+# ---------------------------------------------------------------------------
+
+# Locate the Python environment prefix.
+execute_process(
+    COMMAND "${Python3_EXECUTABLE}" -c "import sys; print(sys.prefix)"
+    OUTPUT_VARIABLE _py_prefix
+    OUTPUT_STRIP_TRAILING_WHITESPACE
+)
+
+# Find MKL CBLAS headers (mkl_cblas.h) — from `pip install mkl-include`.
+# Both the standalone package and conda install them at <prefix>/include.
+set(_mkl_include_dir "")
+foreach(_d "${_py_prefix}/include" "${_py_prefix}/include/mkl")
+    if(EXISTS "${_d}/mkl_cblas.h")
+        set(_mkl_include_dir "${_d}")
+        break()
+    endif()
+endforeach()
+
+# Find libmkl_rt — from `pip install mkl` (a torch dependency).
+set(_mkl_rt_lib "")
+foreach(_lib "libmkl_rt.so.2" "libmkl_rt.so" "libmkl_rt.dylib")
+    if(EXISTS "${_py_prefix}/lib/${_lib}")
+        set(_mkl_rt_lib "${_py_prefix}/lib/${_lib}")
+        break()
+    endif()
+endforeach()
+
+if(NOT _mkl_include_dir OR NOT _mkl_rt_lib)
+    message(FATAL_ERROR
+        "MKL not found in Python environment '${_py_prefix}'.\n"
+        "Install the build dependencies:\n"
+        "  pip install mkl mkl-include intel-openmp\n"
+        "(These are installed automatically alongside `pip install torch` on "
+        "standard PyPI CPU wheels.)"
+    )
+endif()
+
+set(CBLAS_INCLUDE_DIR  "${_mkl_include_dir}")
+set(CBLAS_LIBRARY      "${_mkl_rt_lib}")
+# MKL ships a drop-in FFTW3 compatibility layer; headers live in fftw/
+set(FFTW3F_INCLUDE_DIR "${_mkl_include_dir}/fftw")
+set(FFTW3F_LIBRARY     "${_mkl_rt_lib}")
+# Tell BART's blas.c to #include <mkl_cblas.h> instead of <cblas.h>
+list(APPEND BART_DEFS USE_MKL)
+message(STATUS "BLAS+FFT: MKL in Python environment '${_py_prefix}'")
+message(STATUS "  headers : ${_mkl_include_dir}")
+message(STATUS "  runtime : ${_mkl_rt_lib}")
 
 # ---------------------------------------------------------------------------
 # Generate version.inc — BART's Makefile normally creates this via

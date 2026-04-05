@@ -52,7 +52,9 @@ jobs:
         run: sudo apt-get install -y pandoc
 
       - name: Install Python build dependencies
-        run: pip install torch --index-url https://download.pytorch.org/whl/cpu
+        run: |
+          pip install scikit-build-core pybind11
+          pip install torch --index-url https://download.pytorch.org/whl/cpu
 
       - name: Build and install bartorch (pure-Python, no C++ extension)
         run: BARTORCH_SKIP_EXT=1 pip install -e ".[docs]" --no-build-isolation

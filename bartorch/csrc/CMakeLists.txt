@@ -61,7 +61,7 @@ endif()
 # BART source tree (git submodule at <repo_root>/bart)
 # ---------------------------------------------------------------------------
 # We build only the static libraries we need, not the bart binary.
-set(BART_SRC_DIR "${CMAKE_SOURCE_DIR}/../bart/src")
+set(BART_SRC_DIR "${CMAKE_SOURCE_DIR}/../../bart/src")
 
 # BART compile definitions
 set(BART_DEFS

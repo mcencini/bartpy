@@ -40,6 +40,9 @@ docs = [
     "sphinx-book-theme",
     "nbsphinx",
     "sphinx-copybutton",
+    "nbconvert",
+    "ipykernel",
+    "matplotlib",
 ]
 
 # ---------------------------------------------------------------------------

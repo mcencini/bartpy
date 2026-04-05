@@ -355,9 +355,9 @@ extern "C" void __wrap_grid2H(
 //   ES_hw    = nspread / 2.0            = 3.5
 // ES kernel: phi(x) = exp(ES_beta * sqrt(1 - (x/ES_hw)^2))  for |x| <= ES_hw
 
-static constexpr double ESRO_BETA  = 2.30 * 7.0;   // 16.1
-static constexpr double ESRO_HW    = 7.0 / 2.0;    // 3.5  (ES_halfwidth)
-static constexpr int    ESRO_NQUAD = 256;           // midpoint quadrature points
+static constexpr double ESRO_BETA  = 2.30 * 7.0;  // 16.1
+static constexpr double ESRO_HW    = 7.0 / 2.0;   // 3.5  (ES_halfwidth)
+static constexpr int    ESRO_NQUAD = 256;          // midpoint quadrature points
 
 /// ES kernel phi(x) at x ∈ [0, ESRO_HW].
 static inline double esro_phi(double x) {

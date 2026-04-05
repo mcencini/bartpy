@@ -122,7 +122,6 @@ def _es_rolloff_weight(xi_cps: float,
                        hw: float = 7.0 / 2.0,
                        nquad: int = 256) -> float:
     """Python replica of esro_hat_phi / esro_weight from finufft_grid.cpp."""
-    import math
     h = hw / nquad
     total = 0.0
     for i in range(nquad):

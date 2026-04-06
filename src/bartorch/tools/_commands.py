@@ -348,8 +348,26 @@ def ecalib(
     >>> kspace = bt.phantom([256, 256], s=8)
     >>> sens = bt.ecalib(kspace, calib_size=24)
     """
+    # ecalib output is always 5-dimensional in BART Fortran order:
+    # (nx, ny, nz=1, nc, maps) → C-order: (maps, nc, nz, ny, nx).
+    # Passing the expected C-order shape as output_dims ensures that the
+    # maps dimension is preserved even when maps=1 (which would otherwise
+    # be trimmed as a trailing 1 by run()'s default logic).
+    ndim_in = kspace.ndim          # e.g. 4 for (nc, nz, ny, nx)
+    # Spatial dims: last (ndim_in-1) dims of kspace in C-order
+    spatial = list(kspace.shape[1:])   # (nz?, ny, nx)
+    # Pad spatial to 3 dims (nz, ny, nx) with leading 1s
+    while len(spatial) < 3:
+        spatial.insert(0, 1)
+    nz, ny, nx = spatial[-3], spatial[-2], spatial[-1]
+    nc = kspace.shape[0]
+    nmaps = maps if maps is not None else 1
+    # C-order output shape: (maps, nc, nz, ny, nx)
+    _output_dims = [nmaps, nc, nz, ny, nx]
+
     return _generated.ecalib(
         kspace,
+        output_dims=_output_dims,
         r=calib_size,
         m=maps,
         t=threshold,

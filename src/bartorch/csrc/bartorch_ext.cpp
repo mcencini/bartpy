@@ -398,9 +398,20 @@ static py::object run(
     TORCH_CHECK(ptr != nullptr,
                 "bartorch: memcfl_load returned NULL for output '", output_name, "'");
 
-    // Find effective ndim: trim trailing size-1 dims (minimum 1).
+    // Find effective ndim: trim trailing size-1 dims.
+    // If output_dims_py is a non-None, non-bool list/tuple, use its length as
+    // minimum ndim so that semantically meaningful trailing 1-dims (e.g. the
+    // maps=1 dimension in ecalib output) are preserved.
+    int min_ndim_out = 1;
+    if (!py::isinstance<py::bool_>(output_dims_py) && !output_dims_py.is_none()) {
+        try {
+            int hint = (int)py::len(output_dims_py);
+            if (hint > min_ndim_out) min_ndim_out = hint;
+        } catch (...) {}
+    }
+
     int ndim_out = BART_DIMS;
-    while (ndim_out > 1 && bart_dims_out[ndim_out - 1] == 1) --ndim_out;
+    while (ndim_out > min_ndim_out && bart_dims_out[ndim_out - 1] == 1) --ndim_out;
 
     // Reverse BART Fortran dims → bartorch C-order shape.
     std::vector<int64_t> shape_out(ndim_out);

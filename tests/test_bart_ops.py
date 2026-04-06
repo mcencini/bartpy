@@ -471,7 +471,9 @@ def test_nufft_adjoint():
     back_sq = back.squeeze()
     img_sq = img.squeeze()
     if back_sq.shape != img_sq.shape:
-        # Fall back to flat inner product if shapes differ after squeeze
+        # BART's nufft adjoint may add a trailing size-1 dimension (coil dim)
+        # that .squeeze() doesn't fully remove relative to a plain 2-D image.
+        # Use the minimum element count so the inner product is well-defined.
         n = min(img_sq.numel(), back_sq.numel())
         rhs = (img_sq.reshape(-1)[:n].conj() * back_sq.reshape(-1)[:n]).sum().real.item()
     else:

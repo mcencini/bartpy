@@ -1487,7 +1487,7 @@ def wavelet(
         # Adjoint wavelet: BART CLI = ``wavelet -a flags d1 d2 … input output``
         # The image dims (C-order output_dims reversed to BART Fortran order)
         # must follow the bitmask as positional scalar args.
-        pos: list[Any] = [bitmask, *reversed(output_dims)]
+        pos: list[int] = [bitmask, *reversed(output_dims)]
     else:
         pos = [bitmask]
     return dispatch(

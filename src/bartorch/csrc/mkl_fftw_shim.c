@@ -215,9 +215,9 @@ void *__wrap_fftwf_plan_guru64_dft(
             max_off += (MKL_LONG)(dims[i].n - 1) * dims[i].is;
         for (int i = 0; i < l; i++)
             max_off += (MKL_LONG)(hmdims[i].n - 1) * hmdims[i].is;
-        /* Store span; fall back to a safe minimum of 1. */
-        size_t span = (size_t)(max_off + 1);
-        if (span < 1) span = 1;
+        /* Guard against negative max_off (degenerate all-size-1 plans) before
+         * the signed-to-unsigned cast; a valid FFT array always has span >= 1. */
+        size_t span = (max_off < 0) ? 1 : (size_t)(max_off + 1);
 
         /* ── Wrap in our plan struct ──────────────────────────────────── */
         _bt_plan *plan = (_bt_plan *)malloc(sizeof(_bt_plan));

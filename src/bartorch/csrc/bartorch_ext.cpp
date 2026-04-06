@@ -266,6 +266,19 @@ static py::object run(
         torch::Tensor t = py_inputs[i].cast<torch::Tensor>();
         // Ensure complex64 and C-contiguous (no-op when already correct).
         t = t.to(torch::kComplexFloat).contiguous();
+
+        // Detect aliased inputs: two tensors sharing the same data_ptr confuse
+        // BART's memcfl ref-counting.  memcfl_unmap searches by data pointer,
+        // so the same pointer would be decremented twice for a single entry,
+        // causing a refcount underflow and a process crash.  Clone to give each
+        // registration its own unique backing buffer.
+        for (size_t j = 0; j < inputs.size(); ++j) {
+            if (inputs[j].data_ptr() == t.data_ptr()) {
+                t = t.clone();
+                break;
+            }
+        }
+
         inputs.push_back(t);
 
         std::string name = "_bt_" + std::to_string(call_id) +

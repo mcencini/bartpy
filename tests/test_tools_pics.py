@@ -296,3 +296,87 @@ class TestPicsTorchPriorValidation:
 
         assert len(names) == 3
         assert len(set(names)) == 3, "Names must be unique across calls"
+
+
+# ---------------------------------------------------------------------------
+# pics() — torch_prior integration (real BART call)
+# ---------------------------------------------------------------------------
+# Ported from the spirit of bart/tests/test-pics-pi but with a plug-and-play
+# torch prior instead of L2 regularisation.  The prior is a dummy identity
+# denoiser (returns its input unchanged), which is mathematically equivalent
+# to zero regularisation, so the reconstruction quality should be comparable
+# to (or better than) the L2-only baseline.
+
+
+def _identity_denoiser(x: torch.Tensor) -> torch.Tensor:
+    """Trivial identity: returns input unchanged (zero regularisation)."""
+    return x.clone()
+
+
+class IdentityDenoiserModule(torch.nn.Module):
+    """nn.Module wrapping the identity denoiser."""
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        return x.clone()
+
+
+class TestPicsTorchPriorIntegration:
+    """End-to-end integration tests for pics(…, torch_prior=fn).
+
+    These tests call BART's pics via the C++ extension with a real phantom
+    kspace and ESPIRiT sensitivity maps.  The torch prior is a dummy identity
+    function so the result should be at least as good as L2-only reconstruction.
+    """
+
+    def test_torch_prior_lambda_callable(self):
+        """pics() with identity-lambda prior runs without error."""
+        import bartorch.tools as bt
+
+        ksp = bt.phantom([64, 64], kspace=True, ncoils=4)
+        sens = bt.ecalib(ksp, maps=1)
+        reco = bt.pics(
+            ksp,
+            sens,
+            lambda_=0.01,
+            S=True,
+            torch_prior=_identity_denoiser,
+            torch_prior_lambda=0.0,
+        )
+        assert isinstance(reco, torch.Tensor)
+        assert reco.dtype == torch.complex64
+        assert reco.numel() > 0
+
+    def test_torch_prior_nn_module(self):
+        """pics() with an nn.Module identity prior runs without error."""
+        import bartorch.tools as bt
+
+        ksp = bt.phantom([64, 64], kspace=True, ncoils=4)
+        sens = bt.ecalib(ksp, maps=1)
+        denoiser = IdentityDenoiserModule()
+        reco = bt.pics(
+            ksp,
+            sens,
+            lambda_=0.01,
+            S=True,
+            torch_prior=denoiser,
+            torch_prior_lambda=0.0,
+        )
+        assert isinstance(reco, torch.Tensor)
+        assert reco.dtype == torch.complex64
+        assert reco.numel() > 0
+
+    def test_torch_prior_output_is_nonzero(self):
+        """pics() with torch prior returns a non-trivially-zero reconstruction."""
+        import bartorch.tools as bt
+
+        ksp = bt.phantom([64, 64], kspace=True, ncoils=4)
+        sens = bt.ecalib(ksp, maps=1)
+        reco = bt.pics(
+            ksp,
+            sens,
+            lambda_=0.01,
+            S=True,
+            torch_prior=_identity_denoiser,
+            torch_prior_lambda=0.0,
+        )
+        assert reco.abs().max().item() > 0.0

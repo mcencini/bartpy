@@ -75,11 +75,16 @@ The C++ bridge reverses the dimension array at the boundary.  The underlying
 bytes are identical — zero copy.
 
 Where BART expects an integer bitmask to select axes, bartorch tools accept
-C-order **axis indices** instead (including negative indices):
+C-order **axis indices** instead (including negative indices).  This applies
+to all commands that operate along selected dimensions (`fft`, `ifft`, `flip`,
+`rss`, `avg`, `fftshift`, `fftmod`, `cdf97`, `wavelet`, `conv`, `hist`,
+`mip`, `std`, `var`, …):
 
 ```python
-bt.fft(x, axes=(-1, -2))   # last two axes — equivalent to BART flags=3
-bt.fft(x, axes=0)           # first axis
+bt.fft(x, axes=(-1, -2))    # last two axes — equivalent to BART flags=3
+bt.fft(x, axes=0)            # first axis
+bt.flip(x, axes=-1)          # reverse last axis
+bt.rss(coil_imgs, axes=0)    # RSS over coil (first) axis
 ```
 
 ## Full CLI access
@@ -101,7 +106,7 @@ import bartorch.tools as bt
 # Named wrappers with type hints and docstrings
 result = bt.pics(kspace, sens, R="T:7:0:0.01")       # total variation PICS
 kspace = bt.nufft(traj, kspace_data, adjoint=True)    # adjoint NUFFT
-rss    = bt.rss(kspace, bitmask=3)                    # root-sum-of-squares
+rss    = bt.rss(kspace, axes=(-1, -2))                # root-sum-of-squares over last two axes
 
 # Regenerate wrappers after updating the BART submodule
 python build_tools/gen_tools.py

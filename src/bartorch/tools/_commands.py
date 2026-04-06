@@ -13,6 +13,11 @@ The following commands are overridden:
   ``ncoils`` kwargs; delegates to :func:`_generated.phantom`.
 * :func:`fft` / :func:`ifft` — accept ``axes=`` (C-order indices) instead of
   a raw BART bitmask; ``inverse`` and ``unitary`` flags use full words.
+* :func:`avg`, :func:`cdf97`, :func:`conv`, :func:`fftmod`, :func:`fftshift`,
+  :func:`flip`, :func:`hist`, :func:`mip`, :func:`rss`, :func:`std`,
+  :func:`var`, :func:`wavelet` — replace the positional ``bitmask`` argument
+  with ``axes`` (C-order axis indices, negative values supported); the
+  bitmask conversion is done internally.
 * :func:`ecalib` — maps ``calib_size``, ``maps``, ``threshold``, … to flags,
   then calls :func:`_generated.ecalib`.
 * :func:`caldir` — maps ``calib_size`` → positional ``cal_size`` argument,
@@ -361,8 +366,9 @@ compressed-sensing penalty in PICS.  It uses the syntax::
 * ``N`` — Nuclear-norm Low-Rank
 
 **transform_flags** is a BART bitmask of the axes to which the transform
-is applied.  Use :func:`bartorch.utils.flags.axes_to_flags` to compute it
-from C-order Python axis indices.
+is applied.  The common values below use Fortran-order BART bitmasks directly;
+for a C-order Python axis index, the equivalent bitmask is
+``1 << (ndim - 1 - axis)``.
 
 Common values for a ``(coils, ny, nx)`` k-space (3-D, C-order):
 
@@ -889,5 +895,414 @@ def nufft(
         m=max_iter,
         t=toeplitz or None,
         g=gpu or None,
+        **extra_flags,
+    )
+
+
+# ---------------------------------------------------------------------------
+# Bitmask → axes overrides
+#
+# Every BART command whose first positional scalar argument is a bitmask
+# (selecting dimensions by set-bits) is wrapped here so that callers pass
+# C-order *axis indices* instead.  The conversion to a BART bitmask is done
+# internally via ``axes_to_flags(axes, ndim=input_.ndim)``.
+#
+# Commands covered: avg, cdf97, conv, fftmod, fftshift, flip, hist, mip,
+#                   rss, std, var, wavelet
+# ---------------------------------------------------------------------------
+
+
+def avg(
+    input_: torch.Tensor,
+    axes: int | tuple[int, ...] | list[int],
+    *,
+    output_dims: list[int] | None = None,
+    w: bool = False,
+    **extra_flags: Any,
+) -> torch.Tensor | tuple[torch.Tensor, ...]:
+    """Calculate (weighted) average along C-order axes.
+
+    Parameters
+    ----------
+    input_ : torch.Tensor
+        Input array.
+    axes : int or sequence of int
+        C-order axis index or indices to average over.  Negative values
+        are supported.
+    output_dims : list[int], optional
+        Expected output shape (C-order).  ``None`` → inferred at runtime.
+    w : bool, optional
+        Weighted averaging (``-w``).  Default ``False``.
+    **extra_flags :
+        Additional BART ``avg`` flags forwarded directly.
+    """
+    return _generated.avg(
+        input_,
+        axes_to_flags(axes, ndim=input_.ndim),
+        output_dims=output_dims,
+        w=w or None,
+        **extra_flags,
+    )
+
+
+def cdf97(
+    input_: torch.Tensor,
+    axes: int | tuple[int, ...] | list[int],
+    *,
+    output_dims: list[int] | None = None,
+    i: bool = False,
+    **extra_flags: Any,
+) -> torch.Tensor | tuple[torch.Tensor, ...]:
+    """Perform a CDF 9/7 wavelet transform along C-order axes.
+
+    Parameters
+    ----------
+    input_ : torch.Tensor
+        Input array.
+    axes : int or sequence of int
+        C-order axis index or indices.  Negative values are supported.
+    output_dims : list[int], optional
+        Expected output shape (C-order).  ``None`` → inferred at runtime.
+    i : bool, optional
+        Inverse transform (``-i``).  Default ``False``.
+    **extra_flags :
+        Additional BART ``cdf97`` flags forwarded directly.
+    """
+    return _generated.cdf97(
+        input_,
+        axes_to_flags(axes, ndim=input_.ndim),
+        output_dims=output_dims,
+        i=i or None,
+        **extra_flags,
+    )
+
+
+def conv(
+    input_: torch.Tensor,
+    kernel: torch.Tensor,
+    axes: int | tuple[int, ...] | list[int],
+    *,
+    output_dims: list[int] | None = None,
+    **extra_flags: Any,
+) -> torch.Tensor | tuple[torch.Tensor, ...]:
+    """Convolve *input_* with *kernel* along C-order axes.
+
+    Parameters
+    ----------
+    input_ : torch.Tensor
+        Input array.
+    kernel : torch.Tensor
+        Convolution kernel.
+    axes : int or sequence of int
+        C-order axis index or indices.  Negative values are supported.
+        The ndim of *input_* is used for the axis-to-bitmask conversion.
+    output_dims : list[int], optional
+        Expected output shape (C-order).  ``None`` → inferred at runtime.
+    **extra_flags :
+        Additional BART ``conv`` flags forwarded directly.
+    """
+    return _generated.conv(
+        input_,
+        kernel,
+        axes_to_flags(axes, ndim=input_.ndim),
+        output_dims=output_dims,
+        **extra_flags,
+    )
+
+
+def fftmod(
+    input_: torch.Tensor,
+    axes: int | tuple[int, ...] | list[int],
+    *,
+    output_dims: list[int] | None = None,
+    b: bool = False,
+    i: bool = False,
+    **extra_flags: Any,
+) -> torch.Tensor | tuple[torch.Tensor, ...]:
+    """Apply ±1 modulation along C-order axes.
+
+    Parameters
+    ----------
+    input_ : torch.Tensor
+        Input array.
+    axes : int or sequence of int
+        C-order axis index or indices.  Negative values are supported.
+    output_dims : list[int], optional
+        Expected output shape (C-order).  ``None`` → inferred at runtime.
+    b : bool, optional
+        Apply modulation to *b*oth halves (``-b``).  Default ``False``.
+    i : bool, optional
+        Inverse modulation (``-i``).  Default ``False``.
+    **extra_flags :
+        Additional BART ``fftmod`` flags forwarded directly.
+    """
+    return _generated.fftmod(
+        input_,
+        axes_to_flags(axes, ndim=input_.ndim),
+        output_dims=output_dims,
+        b=b or None,
+        i=i or None,
+        **extra_flags,
+    )
+
+
+def fftshift(
+    input_: torch.Tensor,
+    axes: int | tuple[int, ...] | list[int],
+    *,
+    output_dims: list[int] | None = None,
+    b: bool = False,
+    **extra_flags: Any,
+) -> torch.Tensor | tuple[torch.Tensor, ...]:
+    """Apply FFT shift along C-order axes.
+
+    Parameters
+    ----------
+    input_ : torch.Tensor
+        Input array.
+    axes : int or sequence of int
+        C-order axis index or indices.  Negative values are supported.
+    output_dims : list[int], optional
+        Expected output shape (C-order).  ``None`` → inferred at runtime.
+    b : bool, optional
+        Apply to *b*oth halves (``-b``).  Default ``False``.
+    **extra_flags :
+        Additional BART ``fftshift`` flags forwarded directly.
+    """
+    return _generated.fftshift(
+        input_,
+        axes_to_flags(axes, ndim=input_.ndim),
+        output_dims=output_dims,
+        b=b or None,
+        **extra_flags,
+    )
+
+
+def flip(
+    input_: torch.Tensor,
+    axes: int | tuple[int, ...] | list[int],
+    *,
+    output_dims: list[int] | None = None,
+    **extra_flags: Any,
+) -> torch.Tensor | tuple[torch.Tensor, ...]:
+    """Flip (reverse) array along C-order axes.
+
+    Parameters
+    ----------
+    input_ : torch.Tensor
+        Input array.
+    axes : int or sequence of int
+        C-order axis index or indices to flip.  Negative values are supported.
+    output_dims : list[int], optional
+        Expected output shape (C-order).  ``None`` → inferred at runtime.
+    **extra_flags :
+        Additional BART ``flip`` flags forwarded directly.
+
+    Examples
+    --------
+    >>> import bartorch.tools as bt
+    >>> img = bt.phantom([64, 64])
+    >>> flipped = bt.flip(img, axes=-1)   # reverse last (read) axis
+    """
+    return _generated.flip(
+        input_,
+        axes_to_flags(axes, ndim=input_.ndim),
+        output_dims=output_dims,
+        **extra_flags,
+    )
+
+
+def hist(
+    input_: torch.Tensor,
+    axes: int | tuple[int, ...] | list[int],
+    *,
+    output_dims: list[int] | None = None,
+    c: bool = False,
+    s: int | None = None,
+    **extra_flags: Any,
+) -> torch.Tensor | tuple[torch.Tensor, ...]:
+    """Compute histogram along C-order axes.
+
+    Parameters
+    ----------
+    input_ : torch.Tensor
+        Input array.
+    axes : int or sequence of int
+        C-order axis index or indices.  Negative values are supported.
+    output_dims : list[int], optional
+        Expected output shape (C-order).  ``None`` → inferred at runtime.
+    c : bool, optional
+        Cumulative histogram (``-c``).  Default ``False``.
+    s : int, optional
+        Number of histogram bins (``-s``).  ``None`` → BART default.
+    **extra_flags :
+        Additional BART ``hist`` flags forwarded directly.
+    """
+    return _generated.hist(
+        input_,
+        axes_to_flags(axes, ndim=input_.ndim),
+        output_dims=output_dims,
+        c=c or None,
+        s=s,
+        **extra_flags,
+    )
+
+
+def mip(
+    input_: torch.Tensor,
+    axes: int | tuple[int, ...] | list[int],
+    *,
+    output_dims: list[int] | None = None,
+    m: bool = False,
+    a: bool = False,
+    **extra_flags: Any,
+) -> torch.Tensor | tuple[torch.Tensor, ...]:
+    """Maximum (or minimum) intensity projection along C-order axes.
+
+    Parameters
+    ----------
+    input_ : torch.Tensor
+        Input array.
+    axes : int or sequence of int
+        C-order axis index or indices.  Negative values are supported.
+    output_dims : list[int], optional
+        Expected output shape (C-order).  ``None`` → inferred at runtime.
+    m : bool, optional
+        *Minimum* intensity projection instead of maximum (``-m``).
+        Default ``False``.
+    a : bool, optional
+        Absolute value before projection (``-a``).  Default ``False``.
+    **extra_flags :
+        Additional BART ``mip`` flags forwarded directly.
+    """
+    return _generated.mip(
+        input_,
+        axes_to_flags(axes, ndim=input_.ndim),
+        output_dims=output_dims,
+        m=m or None,
+        a=a or None,
+        **extra_flags,
+    )
+
+
+def rss(
+    input_: torch.Tensor,
+    axes: int | tuple[int, ...] | list[int],
+    *,
+    output_dims: list[int] | None = None,
+    **extra_flags: Any,
+) -> torch.Tensor | tuple[torch.Tensor, ...]:
+    """Root-sum-of-squares combination along C-order axes.
+
+    Parameters
+    ----------
+    input_ : torch.Tensor
+        Input array (typically coil images).
+    axes : int or sequence of int
+        C-order axis index or indices over which to compute RSS.
+        Negative values are supported.
+    output_dims : list[int], optional
+        Expected output shape (C-order).  ``None`` → inferred at runtime.
+    **extra_flags :
+        Additional BART ``rss`` flags forwarded directly.
+
+    Examples
+    --------
+    >>> import bartorch.tools as bt
+    >>> coil_imgs = bt.phantom(s=4, x=64)       # 4-coil phantom
+    >>> combined  = bt.rss(coil_imgs, axes=0)   # RSS over first (coil) axis
+    """
+    return _generated.rss(
+        input_,
+        axes_to_flags(axes, ndim=input_.ndim),
+        output_dims=output_dims,
+        **extra_flags,
+    )
+
+
+def std(
+    input_: torch.Tensor,
+    axes: int | tuple[int, ...] | list[int],
+    *,
+    output_dims: list[int] | None = None,
+    **extra_flags: Any,
+) -> torch.Tensor | tuple[torch.Tensor, ...]:
+    """Compute standard deviation along C-order axes.
+
+    Parameters
+    ----------
+    input_ : torch.Tensor
+        Input array.
+    axes : int or sequence of int
+        C-order axis index or indices.  Negative values are supported.
+    output_dims : list[int], optional
+        Expected output shape (C-order).  ``None`` → inferred at runtime.
+    **extra_flags :
+        Additional BART ``std`` flags forwarded directly.
+    """
+    return _generated.std(
+        input_,
+        axes_to_flags(axes, ndim=input_.ndim),
+        output_dims=output_dims,
+        **extra_flags,
+    )
+
+
+def var(
+    input_: torch.Tensor,
+    axes: int | tuple[int, ...] | list[int],
+    *,
+    output_dims: list[int] | None = None,
+    **extra_flags: Any,
+) -> torch.Tensor | tuple[torch.Tensor, ...]:
+    """Compute variance along C-order axes.
+
+    Parameters
+    ----------
+    input_ : torch.Tensor
+        Input array.
+    axes : int or sequence of int
+        C-order axis index or indices.  Negative values are supported.
+    output_dims : list[int], optional
+        Expected output shape (C-order).  ``None`` → inferred at runtime.
+    **extra_flags :
+        Additional BART ``var`` flags forwarded directly.
+    """
+    return _generated.var(
+        input_,
+        axes_to_flags(axes, ndim=input_.ndim),
+        output_dims=output_dims,
+        **extra_flags,
+    )
+
+
+def wavelet(
+    input_: torch.Tensor,
+    axes: int | tuple[int, ...] | list[int],
+    *,
+    output_dims: list[int] | None = None,
+    a: bool = False,
+    **extra_flags: Any,
+) -> torch.Tensor | tuple[torch.Tensor, ...]:
+    """Perform a wavelet transform along C-order axes.
+
+    Parameters
+    ----------
+    input_ : torch.Tensor
+        Input array.
+    axes : int or sequence of int
+        C-order axis index or indices.  Negative values are supported.
+    output_dims : list[int], optional
+        Expected output shape (C-order).  ``None`` → inferred at runtime.
+    a : bool, optional
+        Adjoint / inverse transform (``-a``).  Default ``False``.
+    **extra_flags :
+        Additional BART ``wavelet`` flags forwarded directly.
+    """
+    return _generated.wavelet(
+        input_,
+        axes_to_flags(axes, ndim=input_.ndim),
+        output_dims=output_dims,
+        a=a or None,
         **extra_flags,
     )

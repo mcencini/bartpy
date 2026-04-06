@@ -106,8 +106,3 @@ def _axes_to_flags(
         flags |= 1 << bart_axis
 
     return flags
-
-
-# Keep the old public name as an alias for backwards compatibility during the
-# transition period.  New code should use ``_axes_to_flags`` directly.
-axes_to_flags = _axes_to_flags

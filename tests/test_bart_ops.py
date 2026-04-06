@@ -303,7 +303,7 @@ def test_fmac_hadamard():
 def test_ecalib_runs_and_returns_tensor():
     """bt.ecalib returns a complex64 tensor for 8-coil phantom kspace."""
     ksp = bt.phantom([128, 128], kspace=True, ncoils=8)
-    sens = bt.ecalib(ksp, maps=1)
+    sens = bt.ecalib(ksp, calib_size=24, maps=1)
     assert isinstance(sens, torch.Tensor)
     assert sens.dtype == torch.complex64
 
@@ -311,7 +311,7 @@ def test_ecalib_runs_and_returns_tensor():
 def test_ecalib_coil_count():
     """bt.ecalib output has C-order shape (maps, nc, nz, ny, nx) = (1, 8, 1, 128, 128)."""
     ksp = bt.phantom([128, 128], kspace=True, ncoils=8)
-    sens = bt.ecalib(ksp, maps=1)
+    sens = bt.ecalib(ksp, calib_size=24, maps=1)
     # BART Fortran order: (nx, ny, nz, nc, maps) = (128, 128, 1, 8, 1)
     # C-order (reversed):                          (1,   8,  1, 128, 128)
     assert sens.shape == torch.Size([1, 8, 1, 128, 128])
@@ -320,7 +320,7 @@ def test_ecalib_coil_count():
 def test_ecalib_nonzero():
     """Sensitivity maps from non-trivial kspace must contain non-zero values."""
     ksp = bt.phantom([128, 128], kspace=True, ncoils=8)
-    sens = bt.ecalib(ksp, maps=1)
+    sens = bt.ecalib(ksp, calib_size=24, maps=1)
     assert sens.abs().max().item() > 0.0
 
 
@@ -346,7 +346,7 @@ def test_pics_pi_reconstruction():
     """
     img = bt.phantom([128, 128])
     ksp = bt.phantom([128, 128], kspace=True, ncoils=8)
-    sens = bt.ecalib(ksp, maps=1)
+    sens = bt.ecalib(ksp, calib_size=24, maps=1)
     reco = bt.pics(ksp, sens, lambda_=0.001, S=True)
     reco_scaled = bt.scale(128.0, reco)
     err = nrmse(reco_scaled, img)

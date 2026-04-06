@@ -64,6 +64,10 @@ typedef struct {
 typedef struct {
     DFTI_DESCRIPTOR_HANDLE  desc;
     int                     sign;     /* FFTW_FORWARD=-1, FFTW_BACKWARD=+1 */
+    size_t                  span;     /* total element count covering the input buffer
+                                       * (max_offset + 1 over all transform + batch dims).
+                                       * Used to allocate a safe temp buffer when in==out
+                                       * (in-place call with a NOT_INPLACE descriptor). */
 } _bt_plan;
 
 /* ─── Helpers ──────────────────────────────────────────────────────────── */
@@ -191,15 +195,41 @@ void *__wrap_fftwf_plan_guru64_dft(
         return NULL;
     }
 
-    /* ── Wrap in our plan struct ────────────────────────────────────────── */
-    _bt_plan *plan = (_bt_plan *)malloc(sizeof(_bt_plan));
-    if (!plan) {
-        DftiFreeDescriptor(&desc);
-        return NULL;
+    /* ── Compute input buffer span (max element offset + 1) ────────────── */
+    /* Needed to safely allocate a temp buffer when execute is called with
+     * in == out (BART's fftmod applies FFT in-place to the kspace array).
+     * MKL DFTI with DFTI_NOT_INPLACE does NOT permit aliased in/out pointers,
+     * so we must copy to a temp buffer in that case.
+     *
+     * span = 1 + sum_d((dims[d].n - 1) * dims[d].is)
+     *          + sum_e((hmdims[e].n - 1) * hmdims[e].is)
+     *
+     * This is the largest element offset reachable within the input array.
+     * For BART's standard contiguous Fortran-order layout this equals
+     * ntrans * product(dims[i].n), but the formula works for any stride
+     * pattern (e.g. non-contiguous sub-arrays).
+     */
+    {
+        MKL_LONG max_off = 0;
+        for (int i = 0; i < k; i++)
+            max_off += (MKL_LONG)(dims[i].n - 1) * dims[i].is;
+        for (int i = 0; i < l; i++)
+            max_off += (MKL_LONG)(hmdims[i].n - 1) * hmdims[i].is;
+        /* Store span; fall back to a safe minimum of 1. */
+        size_t span = (size_t)(max_off + 1);
+        if (span < 1) span = 1;
+
+        /* ── Wrap in our plan struct ──────────────────────────────────── */
+        _bt_plan *plan = (_bt_plan *)malloc(sizeof(_bt_plan));
+        if (!plan) {
+            DftiFreeDescriptor(&desc);
+            return NULL;
+        }
+        plan->desc = desc;
+        plan->sign = sign;
+        plan->span = span;
+        return (void *)plan;
     }
-    plan->desc = desc;
-    plan->sign = sign;
-    return (void *)plan;
 }
 
 /* ─── Execute shim ─────────────────────────────────────────────────────── */
@@ -210,10 +240,36 @@ void __wrap_fftwf_execute_dft(void *_plan, float _Complex *in, float _Complex *o
     assert(plan && plan->desc);
 
     MKL_LONG status;
-    if (plan->sign == -1)
-        status = DftiComputeForward(plan->desc, (void *)in, (void *)out);
-    else
-        status = DftiComputeBackward(plan->desc, (void *)in, (void *)out);
+
+    /* MKL DFTI with DFTI_NOT_INPLACE does NOT permit aliased input/output
+     * buffers.  BART's fftmod frequently calls fftwf_execute_dft with
+     * in == out (in-place application to the kspace array).  Guard against
+     * that by copying the input to a temporary buffer before the DFTI call
+     * and then letting the (out-of-place) DFTI write into the original buffer.
+     *
+     * We use plan->span (the maximum element count reachable in the input
+     * buffer) to size the temporary allocation correctly for any stride layout.
+     */
+    if (in == out) {
+        float _Complex *tmp = (float _Complex *)malloc(plan->span * sizeof(float _Complex));
+        if (!tmp) {
+            fprintf(stderr,
+                    "bartorch mkl_fftw_shim: failed to allocate %zu-element temp buffer "
+                    "for in-place FFT\n", plan->span);
+            abort();
+        }
+        memcpy(tmp, in, plan->span * sizeof(float _Complex));
+        if (plan->sign == -1)
+            status = DftiComputeForward(plan->desc, (void *)tmp, (void *)out);
+        else
+            status = DftiComputeBackward(plan->desc, (void *)tmp, (void *)out);
+        free(tmp);
+    } else {
+        if (plan->sign == -1)
+            status = DftiComputeForward(plan->desc, (void *)in, (void *)out);
+        else
+            status = DftiComputeBackward(plan->desc, (void *)in, (void *)out);
+    }
 
     _bt_check(status, "fftwf_execute_dft");
 }

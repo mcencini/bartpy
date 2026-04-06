@@ -333,7 +333,7 @@ class TestPicsTorchPriorIntegration:
         import bartorch.tools as bt
 
         ksp = bt.phantom([64, 64], kspace=True, ncoils=4)
-        sens = bt.ecalib(ksp, maps=1)
+        sens = bt.ecalib(ksp, calib_size=24, maps=1)
         reco = bt.pics(
             ksp,
             sens,
@@ -351,7 +351,7 @@ class TestPicsTorchPriorIntegration:
         import bartorch.tools as bt
 
         ksp = bt.phantom([64, 64], kspace=True, ncoils=4)
-        sens = bt.ecalib(ksp, maps=1)
+        sens = bt.ecalib(ksp, calib_size=24, maps=1)
         denoiser = IdentityDenoiserModule()
         reco = bt.pics(
             ksp,
@@ -370,7 +370,7 @@ class TestPicsTorchPriorIntegration:
         import bartorch.tools as bt
 
         ksp = bt.phantom([64, 64], kspace=True, ncoils=4)
-        sens = bt.ecalib(ksp, maps=1)
+        sens = bt.ecalib(ksp, calib_size=24, maps=1)
         reco = bt.pics(
             ksp,
             sens,

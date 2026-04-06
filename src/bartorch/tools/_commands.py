@@ -20,6 +20,9 @@ The following commands are overridden:
   bitmask conversion is done internally.
 * :func:`ecalib` — maps ``calib_size``, ``maps``, ``threshold``, … to flags,
   then calls :func:`_generated.ecalib`.
+* :func:`scale` — corrects the generated signature so that ``factor`` (the
+  scale factor) is treated as a positional scalar argument, not as a CFL
+  tensor input.  Delegates to ``dispatch("scale", [input_], _pos=[factor])``.
 * :func:`caldir` — maps ``calib_size`` → positional ``cal_size`` argument,
   then calls :func:`_generated.caldir`.
 * :func:`pics` — ``R`` accepts ``list[str]`` for stacked regularisers; all
@@ -46,6 +49,9 @@ from typing import Any
 
 import torch
 
+from bartorch.core.graph import dispatch
+from bartorch.core.tensor import bart_op
+
 # Module-level reference used by the override implementations below.
 from bartorch.tools import _generated
 
@@ -56,7 +62,7 @@ from bartorch.tools._generated import *  # noqa: F401,F403
 from bartorch.tools._generated import __all__ as _generated_all
 from bartorch.utils.flags import _axes_to_flags
 
-__all__ = [*_generated_all, "ifft"]
+__all__ = [*_generated_all, "ifft", "scale"]
 
 
 # ---------------------------------------------------------------------------
@@ -221,6 +227,57 @@ def ifft(
     >>> image  = bt.ifft(kspace, axes=(-1, -2))
     """
     return fft(input_, axes, unitary=unitary, inverse=True, **extra_flags)
+
+
+# ---------------------------------------------------------------------------
+# Scale — factor is a positional scalar (not a CFL tensor)
+# ---------------------------------------------------------------------------
+
+
+@bart_op
+def scale(
+    factor: float | complex,
+    input_: torch.Tensor,
+    *,
+    output_dims: list[int] | None = None,
+    **extra_flags: Any,
+) -> torch.Tensor:
+    """Scale array by *factor*.
+
+    The auto-generated :func:`_generated.scale` incorrectly treats the scale
+    factor as a CFL tensor input.  In BART's CLI the factor is a positional
+    scalar argument::
+
+        bart scale <factor> <input> <output>
+
+    This override passes *factor* through ``_pos`` so it is inserted in the
+    argv between the flags and the input CFL name.
+
+    Parameters
+    ----------
+    factor : float or complex
+        Multiplicative scale factor.  May be complex (e.g. ``1j`` for a 90°
+        phase rotation).
+    input_ : torch.Tensor
+        Input array (any dtype; cast to ``complex64`` automatically).
+    output_dims : list of int, optional
+        Expected output shape; ``None`` to infer at runtime.
+    **extra_flags :
+        Additional BART ``scale`` flags forwarded directly.
+
+    Returns
+    -------
+    torch.Tensor
+        Scaled array with the same shape as *input_*, dtype ``complex64``.
+
+    Examples
+    --------
+    >>> import bartorch.tools as bt
+    >>> x = bt.phantom([64, 64])
+    >>> y = bt.scale(2.0, x)          # double the magnitude
+    >>> z = bt.scale(1j,  x)          # 90° phase rotation
+    """
+    return dispatch("scale", [input_], output_dims, _pos=[factor], **extra_flags)
 
 
 # ---------------------------------------------------------------------------

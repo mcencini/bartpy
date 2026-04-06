@@ -135,6 +135,8 @@ def test_adjointness_2d():
     # ⟨n1, x⟩ = sum(conj(n1) * x)
     rhs = (n1.conj() * x).sum()
     ref = abs(lhs).item()
+    # Normalise by |lhs| (the forward inner product); avoids division by the
+    # adjoint inner product which may accidentally be near zero.
     err = abs(lhs - rhs).item() / ref if ref != 0.0 else abs(lhs - rhs).item()
     assert err < 1e-4, f"Adjointness error {err:.2e} exceeds 1e-4"
 
@@ -159,5 +161,6 @@ def test_adjointness_3d():
     # ⟨n1, x⟩ = sum(conj(n1) * x)
     rhs = (n1.conj() * x).sum()
     ref = abs(lhs).item()
+    # Normalise by |lhs| (the forward inner product).
     err = abs(lhs - rhs).item() / ref if ref != 0.0 else abs(lhs - rhs).item()
     assert err < 1e-4, f"Adjointness error {err:.2e} exceeds 1e-4"

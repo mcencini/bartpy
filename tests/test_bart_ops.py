@@ -450,7 +450,8 @@ def test_nufft_forward_vs_fft():
     ksp_fft = bt.fft(img, axes=(-1, -2), unitary=True)
     traj = bt.traj(x=32, y=32)
     ksp_nufft = bt.nufft(traj, img, P=True)
-    # ksp_nufft has C-order shape (32, 32, 1); reshape → (1, 32, 32) then squeeze
+    # ksp_nufft has C-order shape (32, 32, 1); reshape → (1, 32, 32) then squeeze.
+    # bitmask 7 = bits 0,1,2 = BART Fortran dims 0,1,2 (all dims of a 3-D array).
     ksp_2d = bt.reshape(ksp_nufft, 7, output_dims=[1, 32, 32]).squeeze()
     err = _nrmse(ksp_2d, ksp_fft)
     assert err < 1e-3, f"nufft -P vs fft nrmse={err:.2e}"
@@ -471,7 +472,8 @@ def test_nufft_adjoint():
     traj = bt.traj(r=True, x=32, y=32)
     # x: random image in C-order (1, 32, 32) — bt.zeros + bt.noise
     x = bt.noise(bt.zeros(3, output_dims=[1, 32, 32]), s=123)
-    # y: random k-space in C-order (32, 32, 1) — reshape then noise
+    # y: random k-space in C-order (32, 32, 1) — reshape then noise.
+    # bitmask 7 = bits 0,1,2 = BART Fortran dims 0,1,2 (all dims of a 3-D array).
     y = bt.noise(
         bt.reshape(bt.zeros(3, output_dims=[1, 32, 32]), 7, output_dims=[32, 32, 1]),
         s=456,

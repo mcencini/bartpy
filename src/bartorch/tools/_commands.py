@@ -979,6 +979,45 @@ def nufft(
 
 
 # ---------------------------------------------------------------------------
+# reshape — pass per-dimension sizes as positional BART args
+#
+# BART CLI: ``bart reshape flags d1 d2 ... dN input output``
+# The generated wrapper only passes ``flags``; the new sizes per selected
+# dimension must follow as positional args.  Sizes are derived from
+# ``output_dims`` (C-order) and reversed to BART Fortran order.
+# ---------------------------------------------------------------------------
+
+
+def reshape(
+    input_: torch.Tensor,
+    flags: int,
+    *,
+    output_dims: list[int] | None = None,
+    **extra_flags: Any,
+) -> torch.Tensor:
+    """Reshape selected dimensions.
+
+    Parameters
+    ----------
+    input_ : torch.Tensor
+        Input array.
+    flags : int
+        Bitmask selecting the dimensions to reshape.
+    output_dims : list[int]
+        New shape in C-order.  The sizes are automatically reversed to Fortran
+        order when passed to BART so that the number of positional size
+        arguments matches the number of bits set in ``flags``.
+    **extra_flags :
+        Additional BART ``reshape`` flags forwarded directly.
+    """
+    if output_dims is not None:
+        pos: list[Any] = [flags, *reversed(output_dims)]
+    else:
+        pos = [flags]
+    return dispatch("reshape", [input_], output_dims, _pos=pos, **extra_flags)
+
+
+# ---------------------------------------------------------------------------
 # ones / zeros — pass dimension sizes as positional BART args
 #
 # BART CLI: ``bart ones D d1 d2 ... dD output``

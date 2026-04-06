@@ -449,8 +449,8 @@ def test_nufft_forward_vs_fft():
     ksp_fft = bt.fft(img, axes=(-1, -2), unitary=True)  # (128,128)
     # Cartesian trajectory (no -r)
     traj = bt.traj(x=128, y=128)
-    # Partition-of-unity NUFFT forward
-    ksp_nufft = bt.nufft(traj, img)
+    # Partition-of-unity NUFFT forward (-P flag matches BART test)
+    ksp_nufft = bt.nufft(traj, img, P=True)
     # Reshape to (1,128,128) and compare with (128,128) FFT
     ksp_nufft_2d = bt.reshape(ksp_nufft, 7, output_dims=[1, 128, 128])
     err = _nrmse(ksp_nufft_2d.squeeze(), ksp_fft)

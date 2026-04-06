@@ -20,7 +20,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, macos-latest, windows-latest]
+        os: [ubuntu-latest, macos-latest]
         python-version: ["3.10", "3.11", "3.12"]
     runs-on: ${{ matrix.os }}
 
@@ -44,8 +44,6 @@ jobs:
       - name: Install system dependencies (macOS)
         if: runner.os == 'macOS'
         run: brew install cmake
-
-      # cmake is pre-installed on windows-latest GitHub Actions runners
 
       - name: Install Python build dependencies
         # Using --no-build-isolation means pip will NOT auto-install

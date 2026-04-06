@@ -110,10 +110,15 @@ def phantom(
     >>> ph = bt.phantom([256, 256])                          # 2-D Shepp-Logan
     >>> ksp = bt.phantom([256, 256], kspace=True, ncoils=8)  # 8-coil k-space
     """
+    # BART phantom's -x n flag sets all spatial dimensions to n.
+    # Without it BART defaults to 128.  Derive from dims unless the caller
+    # already passed x= explicitly via extra_flags.
+    x_val = extra_flags.pop("x", dims[-1] if dims else None)
     return _generated.phantom(
         output_dims=dims,
         k=kspace or None,
         s=ncoils,
+        x=x_val,
         **extra_flags,
     )
 
@@ -971,6 +976,67 @@ def nufft(
         g=gpu or None,
         **extra_flags,
     )
+
+
+# ---------------------------------------------------------------------------
+# ones / zeros — pass dimension sizes as positional BART args
+#
+# BART CLI: ``bart ones D d1 d2 ... dD output``
+#                        ``bart zeros D d1 d2 ... dD output``
+# The generated wrappers only pass ``D``; the per-dimension sizes are
+# derived from ``output_dims`` (C-order) and forwarded in reversed (Fortran)
+# order so BART produces the expected shape.
+# ---------------------------------------------------------------------------
+
+
+def ones(
+    dims: int,
+    *,
+    output_dims: list[int] | None = None,
+    **extra_flags: Any,
+) -> torch.Tensor:
+    """Create an array filled with ones.
+
+    Parameters
+    ----------
+    dims : int
+        Number of dimensions (``D`` in BART ``ones D d1…dD``).
+    output_dims : list[int]
+        Shape of the output array in C-order.  The sizes are automatically
+        converted to Fortran order when passed to BART.
+    **extra_flags :
+        Additional BART ``ones`` flags forwarded directly.
+    """
+    if output_dims is not None:
+        pos: list[Any] = [dims, *reversed(output_dims)]
+    else:
+        pos = [dims]
+    return dispatch("ones", [], output_dims, _pos=pos, **extra_flags)
+
+
+def zeros(
+    dims: int,
+    *,
+    output_dims: list[int] | None = None,
+    **extra_flags: Any,
+) -> torch.Tensor:
+    """Create a zero-filled array.
+
+    Parameters
+    ----------
+    dims : int
+        Number of dimensions (``D`` in BART ``zeros D d1…dD``).
+    output_dims : list[int]
+        Shape of the output array in C-order.  The sizes are automatically
+        converted to Fortran order when passed to BART.
+    **extra_flags :
+        Additional BART ``zeros`` flags forwarded directly.
+    """
+    if output_dims is not None:
+        pos: list[Any] = [dims, *reversed(output_dims)]
+    else:
+        pos = [dims]
+    return dispatch("zeros", [], output_dims, _pos=pos, **extra_flags)
 
 
 # ---------------------------------------------------------------------------

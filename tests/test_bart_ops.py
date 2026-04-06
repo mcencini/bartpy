@@ -110,7 +110,7 @@ def test_phantom_coil_consistency():
     BART: ``fmac shepplogan coils sl_coil2 ; nrmse -t 0. coil sl_coil2``
     """
     img = bt.phantom([128, 128])
-    coil_sens = bt.phantom([128, 128], S=8)     # sensitivities only (-S8)
+    coil_sens = bt.phantom([128, 128], S=8)  # sensitivities only (-S8)
     coil_imgs = bt.phantom([128, 128], ncoils=8)  # weighted copies (-s8)
     manual = bt.fmac(img, coil_sens)
     err = _nrmse(manual, coil_imgs)
@@ -476,10 +476,10 @@ def test_nufft_adjoint():
     # C-order (128,128,1) = Fortran (1,128,128)
     n2 = bt.reshape(n2b, 7, output_dims=[128, 128, 1])
     traj = bt.traj(r=True, x=128, y=128)
-    k = bt.nufft(traj, n1)                    # forward: image → kspace
-    x = bt.nufft(traj, n2, adjoint=True)      # adjoint: kspace → image
-    s1 = bt.fmac(n1, x, C=True, s=7)          # ⟨n1, x*⟩
-    s2 = bt.fmac(k, n2, C=True, s=7)          # ⟨k, n2*⟩
+    k = bt.nufft(traj, n1)  # forward: image → kspace
+    x = bt.nufft(traj, n2, adjoint=True)  # adjoint: kspace → image
+    s1 = bt.fmac(n1, x, C=True, s=7)  # ⟨n1, x*⟩
+    s2 = bt.fmac(k, n2, C=True, s=7)  # ⟨k, n2*⟩
     err = _nrmse(s1, s2)
     assert err < 1e-4, f"nufft adjointness error {err:.2e}"
 
@@ -549,10 +549,10 @@ def test_noise_std():
           ``std 3 n d ; ones 2 1 1 o ; nrmse -t 0.02 o d``
     """
     z = bt.zeros(2, output_dims=[100, 100])  # (100,100) zeros
-    n = bt.noise(z, s=1, n=1.0)              # unit-variance noise
+    n = bt.noise(z, s=1, n=1.0)  # unit-variance noise
     # std over both axes (Fortran bitmask 3 = C-order axes (-1,-2))
-    d = bt.std(n, axes=(-1, -2))             # result is (1,1) scalar
-    o = bt.ones(2, output_dims=[1, 1])       # ones (1,1)
+    d = bt.std(n, axes=(-1, -2))  # result is (1,1) scalar
+    o = bt.ones(2, output_dims=[1, 1])  # ones (1,1)
     err = _nrmse(d.real.to(torch.complex64), o)
     assert err < 0.02, f"noise std nrmse={err:.4f}"
 

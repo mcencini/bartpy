@@ -35,6 +35,16 @@ set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} ${TORCH_CXX_FLAGS}")
 # Find Python (for pybind11 / extension suffix)
 # ---------------------------------------------------------------------------
 find_package(Python3 REQUIRED COMPONENTS Interpreter Development)
+
+# Disable LTO before finding pybind11 so pybind11_add_module never adds
+# pybind11::lto.  GNU ld's --wrap resolves symbols AFTER LTO inlines them,
+# so --wrap,fftwf_*/grid2/rolloff would silently have no effect with LTO on.
+# Setting CMAKE_INTERPROCEDURAL_OPTIMIZATION here is the only reliable way:
+# pybind11 3.x checks `if(NOT DEFINED CMAKE_INTERPROCEDURAL_OPTIMIZATION)`
+# and skips its -flto injection only when the variable is already defined.
+set(CMAKE_INTERPROCEDURAL_OPTIMIZATION OFF CACHE BOOL
+    "Disable LTO so GNU --wrap symbols are applied correctly at link time")
+
 find_package(pybind11 CONFIG QUIET)
 if(NOT pybind11_FOUND)
     # Fallback: use pybind11 bundled with PyTorch.
@@ -561,14 +571,6 @@ target_link_libraries(_bartorch_ext PRIVATE
     ${TORCH_PYTHON_LIBRARY}
 )
 target_compile_definitions(_bartorch_ext PRIVATE ${BART_DEFS})
-
-# Disable LTO (link-time optimisation) for the extension.
-# GCC's -flto breaks GNU ld's --wrap: the LTO plugin resolves calls at the IR
-# level BEFORE --wrap renames symbols, so __wrap_grid2 etc. are never reached.
-# PyTorch or CMake may inject -flto=auto — we explicitly disable it.
-set_property(TARGET _bartorch_ext PROPERTY INTERPROCEDURAL_OPTIMIZATION FALSE)
-target_compile_options(_bartorch_ext PRIVATE -fno-lto)
-target_link_options(_bartorch_ext PRIVATE -fno-lto)
 
 # --wrap the fftwf_* symbols so mkl_fftw_shim.c intercepts them
 if(APPLE)

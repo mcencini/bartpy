@@ -258,7 +258,7 @@ endif()
 # system libfftw3f (fallback path) — by setting FINUFFT_FFTW_LIBRARIES.
 # ---------------------------------------------------------------------------
 if(BARTORCH_USE_FINUFFT)
-    set(_finufft_dir "${CMAKE_SOURCE_DIR}/../../finufft")
+    set(_finufft_dir "${CMAKE_SOURCE_DIR}/../../../finufft")
     if(NOT IS_DIRECTORY "${_finufft_dir}")
         message(WARNING
             "BARTORCH_USE_FINUFFT=ON but finufft/ submodule not found at "
@@ -561,6 +561,14 @@ target_link_libraries(_bartorch_ext PRIVATE
     ${TORCH_PYTHON_LIBRARY}
 )
 target_compile_definitions(_bartorch_ext PRIVATE ${BART_DEFS})
+
+# Disable LTO (link-time optimisation) for the extension.
+# GCC's -flto breaks GNU ld's --wrap: the LTO plugin resolves calls at the IR
+# level BEFORE --wrap renames symbols, so __wrap_grid2 etc. are never reached.
+# PyTorch or CMake may inject -flto=auto — we explicitly disable it.
+set_property(TARGET _bartorch_ext PROPERTY INTERPROCEDURAL_OPTIMIZATION FALSE)
+target_compile_options(_bartorch_ext PRIVATE -fno-lto)
+target_link_options(_bartorch_ext PRIVATE -fno-lto)
 
 # --wrap the fftwf_* symbols so mkl_fftw_shim.c intercepts them
 if(APPLE)

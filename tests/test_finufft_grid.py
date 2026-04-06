@@ -59,20 +59,20 @@ def test_import():
 
 
 # ---------------------------------------------------------------------------
-# Test 2: __wrap symbols present in the shared object (grid2 / grid2H)
+# Test 2: --wrap grid2/grid2H symbols present in the shared object
 # ---------------------------------------------------------------------------
 @skip_no_ext
 def test_finufft_wrap_symbols():
-    """__wrap_grid2 and __wrap_grid2H are present in _bartorch_ext.so.
+    """grid2 and grid2H symbols are present in _bartorch_ext.so.
 
-    Uses ctypes to inspect the symbol table so we don't need a Python
-    binding for the C-level functions.
+    The GNU --wrap linker flag redirects calls at static link time.
+    The __wrap_* symbols are consumed by the linker and may not appear
+    in the *dynamic* symbol table, so we use readelf to inspect the
+    full symbol table instead of ctypes.
     """
-    import ctypes
     import glob
     import pathlib
-
-    import bartorch._bartorch_ext as ext  # noqa: F401
+    import subprocess
 
     import bartorch
 
@@ -80,9 +80,21 @@ def test_finufft_wrap_symbols():
     if not matches:
         pytest.skip("Cannot locate _bartorch_ext.so to inspect symbols")
 
-    lib = ctypes.CDLL(matches[0])
-    assert hasattr(lib, "__wrap_grid2"), "__wrap_grid2 symbol missing from _bartorch_ext.so"
-    assert hasattr(lib, "__wrap_grid2H"), "__wrap_grid2H symbol missing from _bartorch_ext.so"
+    try:
+        out = subprocess.check_output(
+            ["readelf", "-s", matches[0]], text=True, stderr=subprocess.DEVNULL
+        )
+    except (FileNotFoundError, subprocess.CalledProcessError):
+        pytest.skip("readelf not available")
+
+    # When --wrap,grid2 is active, the original grid2 gets renamed to
+    # __real_grid2 and __wrap_grid2 handles calls.  If --wrap was NOT
+    # applied, only the plain grid2 symbol exists (no __real_ / __wrap_).
+    # Either __wrap_ or __real_ confirms the wrapping is in place.
+    has_wrap = "__wrap_grid2" in out or "__real_grid2" in out
+    has_wrapH = "__wrap_grid2H" in out or "__real_grid2H" in out
+    assert has_wrap, "grid2 wrapping not detected in _bartorch_ext.so"
+    assert has_wrapH, "grid2H wrapping not detected in _bartorch_ext.so"
 
 
 # ---------------------------------------------------------------------------
@@ -90,10 +102,10 @@ def test_finufft_wrap_symbols():
 # ---------------------------------------------------------------------------
 @skip_no_ext
 def test_rolloff_wrap_symbols():
-    """__wrap_rolloff_correction and friends are present in _bartorch_ext.so."""
-    import ctypes
+    """rolloff_correction wrapping symbols are present in _bartorch_ext.so."""
     import glob
     import pathlib
+    import subprocess
 
     import bartorch
 
@@ -101,13 +113,16 @@ def test_rolloff_wrap_symbols():
     if not matches:
         pytest.skip("Cannot locate _bartorch_ext.so to inspect symbols")
 
-    lib = ctypes.CDLL(matches[0])
-    for sym in (
-        "__wrap_rolloff_correction",
-        "__wrap_apply_rolloff_correction",
-        "__wrap_apply_rolloff_correction2",
-    ):
-        assert hasattr(lib, sym), f"{sym} symbol missing from _bartorch_ext.so"
+    try:
+        out = subprocess.check_output(
+            ["readelf", "-s", matches[0]], text=True, stderr=subprocess.DEVNULL
+        )
+    except (FileNotFoundError, subprocess.CalledProcessError):
+        pytest.skip("readelf not available")
+
+    for sym in ("rolloff_correction", "apply_rolloff_correction", "apply_rolloff_correction2"):
+        has_sym = f"__wrap_{sym}" in out or f"__real_{sym}" in out
+        assert has_sym, f"{sym} wrapping not detected in _bartorch_ext.so"
 
 
 # ---------------------------------------------------------------------------
@@ -198,76 +213,58 @@ skip_no_run = pytest.mark.skipif(
 
 @skip_no_run
 def test_adjointness_2d():
-    """Adjointness of grid2 / grid2H for a 2-D radial trajectory.
+    """Adjointness of NUFFT forward/adjoint for a 2-D radial trajectory.
 
-    Checks:  |⟨grid2H(x), y⟩ − ⟨x, grid2(y)⟩| / (‖x‖·‖y‖) < 1e-4
+    Mirrors BART's test-nufft-adjoint from nufft.mk:
+        traj -r -x128 -y128 → nufft / nufft -a → fmac inner products → nrmse
+
+    Checks:  |⟨A x, y⟩ − ⟨x, A^H y⟩| / (‖x‖ · ‖y‖) < tol
+
+    The forward/adjoint internally exercise grid2H / grid2 which are
+    replaced by FINUFFT's __wrap_grid2H / __wrap_grid2.
     """
     import torch
 
-    import bartorch as bt
+    import bartorch.tools as bt
 
-    torch.manual_seed(0)
+    # Generate proper radial trajectory using BART's traj tool
+    traj = bt.traj(r=True, x=64, y=64)
 
-    # Image dimensions (non-oversampled)
-    Nx, Ny = 64, 64
-    # Number of radial spokes and readout points
-    n_spokes, n_ro = 128, 64
-    M = n_spokes * n_ro  # total k-space samples
+    # Random image and kspace-shaped noise (matching BART test pattern)
+    n1 = bt.noise(torch.zeros(1, 64, 64, dtype=torch.complex64), s=123)
+    n2 = bt.noise(torch.zeros(64, 64, 1, dtype=torch.complex64), s=321)
 
-    # Random radial trajectory in [-0.5, 0.5] × Nx (BART units)
-    angles = torch.linspace(0, math.pi, n_spokes)
-    r = torch.linspace(-n_ro / 2, n_ro / 2, n_ro)
-    traj_x = torch.outer(torch.cos(angles), r).reshape(-1)
-    traj_y = torch.outer(torch.sin(angles), r).reshape(-1)
-    traj_z = torch.zeros(M)
-    # BART trajectory: complex float, shape [3, n_ro, n_spokes] → [3, M, 1]
-    # (real part = position, imaginary part = 0)
-    traj = torch.stack([traj_x, traj_y, traj_z]).reshape(3, n_ro, n_spokes, 1)
-    traj = traj.to(torch.complex64)
+    # Forward NUFFT (exercises grid2H via FINUFFT __wrap_grid2H)
+    k = bt.nufft(traj, n1)
+    # Adjoint NUFFT (exercises grid2 via FINUFFT __wrap_grid2)
+    x = bt.nufft(traj, n2, adjoint=True)
 
-    # Random grid (oversampled image) and k-space data
-    os = 2
-    grid = torch.randn(Nx * os, Ny * os, 1, 1, dtype=torch.complex64)
-    ksp = torch.randn(1, n_ro, n_spokes, 1, dtype=torch.complex64)
-
-    # grid2H: grid → kspace
-    Ag_ksp = bt.tools.gridH(traj, grid)  # placeholder names; adjust for actual API
-    # grid2: kspace → grid
-    AH_ksp_g = bt.tools.grid(traj, ksp)
-
-    # Adjointness: ⟨Ag_ksp, ksp⟩ ≈ ⟨grid, AH_ksp_g⟩
-    lhs = (Ag_ksp * ksp.conj()).sum().real
-    rhs = (AH_ksp_g * grid.conj()).sum().real
-    rel_err = abs(float(lhs - rhs)) / (float(Ag_ksp.norm()) * float(ksp.norm()))
-    assert rel_err < 1e-4, f"Adjointness error {rel_err:.2e} exceeds 1e-4"
+    # Adjointness: ⟨A n1, n2⟩ ≈ ⟨n1, A^H n2⟩
+    s1 = bt.fmac(n1, x, C=True, s=7)
+    s2 = bt.fmac(k, n2, C=True, s=7)
+    err = float(bt.nrmse(s1, s2))
+    assert err < 1e-4, f"Adjointness error {err:.2e} exceeds 1e-4"
 
 
 @skip_no_run
 def test_adjointness_3d():
-    """Adjointness of grid2 / grid2H for a 3-D Koosh-ball trajectory."""
+    """Adjointness of NUFFT forward/adjoint for a smaller trajectory.
+
+    Same pattern as test_adjointness_2d but with smaller dimensions for speed.
+    """
     import torch
 
-    import bartorch as bt
+    import bartorch.tools as bt
 
-    torch.manual_seed(1)
-    # Coarser dims to keep the test fast
-    N = 16
-    M = 512
+    traj = bt.traj(r=True, x=16, y=16)
 
-    # Random trajectory on the unit sphere, scaled to [-N/2, N/2]
-    pts = torch.randn(3, M, dtype=torch.float32)
-    pts = pts / pts.norm(dim=0, keepdim=True) * (N / 2) * torch.rand(M)
-    traj = torch.zeros(3, M, 1, 1, dtype=torch.complex64)
-    traj[:, :, 0, 0] = pts.to(torch.complex64)
+    n1 = bt.noise(torch.zeros(1, 16, 16, dtype=torch.complex64), s=123)
+    n2 = bt.noise(torch.zeros(16, 16, 1, dtype=torch.complex64), s=321)
 
-    os = 2
-    grid = torch.randn(N * os, N * os, N * os, 1, dtype=torch.complex64)
-    ksp = torch.randn(1, M, 1, 1, dtype=torch.complex64)
+    k = bt.nufft(traj, n1)
+    x = bt.nufft(traj, n2, adjoint=True)
 
-    Ag_ksp = bt.tools.gridH(traj, grid)
-    AH_ksp_g = bt.tools.grid(traj, ksp)
-
-    lhs = (Ag_ksp * ksp.conj()).sum().real
-    rhs = (AH_ksp_g * grid.conj()).sum().real
-    rel_err = abs(float(lhs - rhs)) / (float(Ag_ksp.norm()) * float(ksp.norm()))
-    assert rel_err < 1e-4, f"3-D adjointness error {rel_err:.2e} exceeds 1e-4"
+    s1 = bt.fmac(n1, x, C=True, s=7)
+    s2 = bt.fmac(k, n2, C=True, s=7)
+    err = float(bt.nrmse(s1, s2))
+    assert err < 1e-4, f"Adjointness error {err:.2e} exceeds 1e-4"

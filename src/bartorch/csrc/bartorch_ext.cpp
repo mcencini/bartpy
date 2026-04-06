@@ -252,6 +252,8 @@ static py::object run(
     int saved_debug = debug_level;
     if (debug_level < 0 || debug_level > BARTORCH_DP_WARN)
         debug_level = BARTORCH_DP_WARN;
+    // TEMPORARY: enable full debug output for diagnosis
+    debug_level = 4;
 
     // ── 1. Register input tensors ──────────────────────────────────────────
     // Use a per-call counter in names so stale entries from a previous error
@@ -323,6 +325,11 @@ static py::object run(
     argv.push_back(nullptr);
     int argc = (int)parts.size();
 
+    // Debug: print argv
+    fprintf(stderr, "DEBUG bart_command argc=%d: ", argc);
+    for (int i = 0; i < argc; ++i) fprintf(stderr, "'%s' ", parts[i].c_str());
+    fprintf(stderr, "\n");
+
     char err_buf[512] = {'\0'};
     // Clear any pending Python exception before calling bart_command.
     // With BART_WITH_PYTHON, BART's error() calls PyErr_SetString, which sets
@@ -332,6 +339,20 @@ static py::object run(
     // state before the BART call.
     if (PyErr_Occurred()) PyErr_Clear();
     int  ret          = bart_command(sizeof(err_buf), err_buf, argc, argv.data());
+    fprintf(stderr, "DEBUG bart_command ret=%d err='%s'\n", ret, err_buf);
+    // Debug: immediately check the output CFL content right after bart_command
+    if (ret == 0 && want_cfl_output) {
+        long dbg_dims[BART_DIMS] = {0};
+        void* dbg_ptr = memcfl_load(output_name.c_str(), BART_DIMS, dbg_dims);
+        if (dbg_ptr) {
+            float* fp = (float*)dbg_ptr;
+            bool allzero = true;
+            for (int k = 0; k < 16; ++k) if (fp[k] != 0.f) { allzero = false; break; }
+            fprintf(stderr, "DEBUG post-bart output='%s' ptr=%p first=(%g,%g) allzero=%d\n",
+                    output_name.c_str(), dbg_ptr, fp[0], fp[1], (int)allzero);
+            memcfl_unmap(dbg_ptr);  // undo the load refcount increment
+        }
+    }
     // Capture the BART-set Python exception (if any) and clear it before
     // pybind11 sees it.  We propagate BART errors via ret != 0 / RuntimeError.
     std::string bart_py_err;
@@ -395,6 +416,8 @@ static py::object run(
     // memcfl_load returns complex float* in C; we capture it as void* to avoid
     // C99 complex-type usage in C++ code outside an extern "C" block.
     void* ptr = memcfl_load(output_name.c_str(), BART_DIMS, bart_dims_out);
+    fprintf(stderr, "DEBUG run('%s'): output_name='%s', ptr=%p\n",
+            op_name.c_str(), output_name.c_str(), ptr);
     TORCH_CHECK(ptr != nullptr,
                 "bartorch: memcfl_load returned NULL for output '", output_name, "'");
 
@@ -423,6 +446,16 @@ static py::object run(
     //  Fortran-order buffer — so memcpy is a straight block copy, no reordering.)
     auto result = torch::empty(shape_out,
                                torch::TensorOptions().dtype(torch::kComplexFloat));
+    // Debug: check first few floats of the output buffer
+    {
+        float* fp = (float*)ptr;
+        size_t numel = (size_t)result.numel();
+        bool allzero = true;
+        for (size_t k = 0; k < std::min(numel * 2, (size_t)16); ++k)
+            if (fp[k] != 0.f) { allzero = false; break; }
+        fprintf(stderr, "DEBUG memcpy: numel=%zu, first_elem=(%g,%g), allzero=%d\n",
+                numel, fp[0], fp[1], (int)allzero);
+    }
     std::memcpy(result.data_ptr(), ptr,
                 (size_t)result.numel() * sizeof(c10::complex<float>));
 

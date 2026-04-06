@@ -1104,7 +1104,7 @@ def fftmod(
     output_dims : list[int], optional
         Expected output shape (C-order).  ``None`` → inferred at runtime.
     b : bool, optional
-        Apply modulation to *b*oth halves (``-b``).  Default ``False``.
+        Apply modulation to both halves (``-b``).  Default ``False``.
     i : bool, optional
         Inverse modulation (``-i``).  Default ``False``.
     **extra_flags :
@@ -1139,7 +1139,7 @@ def fftshift(
     output_dims : list[int], optional
         Expected output shape (C-order).  ``None`` → inferred at runtime.
     b : bool, optional
-        Apply to *b*oth halves (``-b``).  Default ``False``.
+        Apply to both halves (``-b``).  Default ``False``.
     **extra_flags :
         Additional BART ``fftshift`` flags forwarded directly.
     """

@@ -1481,9 +1481,14 @@ def wavelet(
     **extra_flags :
         Additional BART ``wavelet`` flags forwarded directly.
     """
-    bitmask = _axes_to_flags(axes, ndim=input_.ndim)
     if a and output_dims is not None:
         # Adjoint wavelet: BART CLI = ``wavelet -a flags d1 d2 … input output``
+        # BART's forward wavelet collapses all flagged spatial dims into a single
+        # 1D coefficient array (wavelet_coeffs2 sets odims[first_bit] = total,
+        # odims[other_bits] = 1).  Therefore input_.ndim == 1 here, and using it
+        # to compute the bitmask would raise "axis -2 out of range for ndim=1".
+        # Use len(output_dims) instead — the output (reconstructed image) ndim.
+        bitmask = _axes_to_flags(axes, ndim=len(output_dims))
         # The image dims (C-order output_dims reversed to BART Fortran order)
         # must follow the bitmask as positional scalar args.
         # Call dispatch directly (not _generated.wavelet) so we can pass the
@@ -1496,8 +1501,9 @@ def wavelet(
             a=True,
             **extra_flags,
         )
-    # Forward path: delegate to the @bart_op-decorated generated wrapper
-    # (same behaviour as the pre-fix override).
+    # Forward path: bitmask from input shape.
+    bitmask = _axes_to_flags(axes, ndim=input_.ndim)
+    # Delegate to the @bart_op-decorated generated wrapper.
     return _generated.wavelet(
         input_,
         bitmask,

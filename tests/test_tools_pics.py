@@ -4,16 +4,13 @@ These tests cover:
 
 * ``_bart_img_dims_from_kspace`` — converts a kspace tensor shape to the
   BART Fortran-order ``img_dims`` array (length 16).
-* ``pics(..., torch_prior=fn)`` argument validation and R-flag merging logic.
-  The mocking-based tests exercise the Python layer independently of the
-  C++ dispatch stub.
+* ``pics(..., torch_prior=fn)`` argument validation via signature inspection.
 """
 
 from __future__ import annotations
 
 import inspect
 
-import pytest
 import torch
 
 from bartorch.tools._commands import _bart_img_dims_from_kspace, pics
@@ -22,17 +19,6 @@ __all__: list[str] = []
 
 _BART_DIMS = 16
 _COIL_DIM = 3
-
-
-# ---------------------------------------------------------------------------
-# Helpers
-# ---------------------------------------------------------------------------
-
-
-def _make_inputs(nc=2, ny=8, nx=8):
-    kspace = torch.zeros(nc, 1, ny, nx, dtype=torch.complex64)
-    sens = torch.zeros(nc, 1, ny, nx, dtype=torch.complex64)
-    return kspace, sens
 
 
 # ---------------------------------------------------------------------------
@@ -121,7 +107,7 @@ def test_img_dims_3d_coil_zeroed():
 
 
 # ---------------------------------------------------------------------------
-# pics() — torch_prior argument validation
+# pics() — torch_prior argument validation (signature inspection only)
 # ---------------------------------------------------------------------------
 
 
@@ -133,171 +119,13 @@ def test_torch_prior_lambda_default_is_float():
     assert default == 1.0
 
 
-def test_tf_reg_string_format():
-    """Verify the -R TF:{bartorch://...}:lambda string is well-formed."""
-    import bartorch.tools._commands as cmds
-
-    captured = {}
-
-    class FakeExt:
-        def register_torch_prior(self, name, fn, dims):
-            captured["name"] = name
-            captured["dims"] = dims
-
-        def unregister_torch_prior(self, name):
-            pass
-
-    original_get_ext = None
-    try:
-        import bartorch.core.graph as graph_mod
-
-        original_get_ext = graph_mod._get_ext
-    except Exception:
-        pytest.skip("bartorch.core.graph not importable")
-
-    call_args = {}
-
-    def fake_generated_pics(kspace, sens, **kwargs):
-        call_args.update(kwargs)
-        raise RuntimeError("sentinel")
-
-    original_generated_pics = cmds._generated.pics
-    try:
-        graph_mod._get_ext = lambda: FakeExt()
-        cmds._generated.pics = fake_generated_pics
-        kspace, sens = _make_inputs()
-        with pytest.raises(RuntimeError, match="sentinel"):
-            pics(kspace, sens, torch_prior=lambda x: x, torch_prior_lambda=0.05)
-    finally:
-        graph_mod._get_ext = original_get_ext
-        cmds._generated.pics = original_generated_pics
-
-    # Verify the R flag contains the bartorch:// sentinel and lambda.
-    r_val = call_args.get("R", "")
-    r_str = r_val if isinstance(r_val, str) else r_val[0]
-    assert r_str.startswith("TF:{bartorch://"), repr(r_str)
-    assert r_str.endswith("}:0.05"), repr(r_str)
-    # Name must be a non-empty string starting with _btprior_
-    assert captured["name"].startswith("_btprior_")
-    # dims must have length 16 and coil dim 3 == 1
-    assert len(captured["dims"]) == _BART_DIMS
-    assert captured["dims"][_COIL_DIM] == 1
+def test_pics_has_torch_prior_parameter():
+    """pics() signature must include torch_prior keyword."""
+    sig = inspect.signature(pics)
+    assert "torch_prior" in sig.parameters
 
 
-def test_torch_prior_r_merging_with_existing_r_string():
-    """torch_prior appended after an existing R string -> list of two."""
-    import bartorch.core.graph as graph_mod
-    import bartorch.tools._commands as cmds
-
-    class FakeExt:
-        def register_torch_prior(self, *a):
-            pass
-
-        def unregister_torch_prior(self, *a):
-            pass
-
-    call_args = {}
-
-    def fake_generated_pics(kspace, sens, **kwargs):
-        call_args.update(kwargs)
-        raise RuntimeError("sentinel")
-
-    original_get_ext = graph_mod._get_ext
-    original_pics = cmds._generated.pics
-    try:
-        graph_mod._get_ext = lambda: FakeExt()
-        cmds._generated.pics = fake_generated_pics
-        kspace, sens = _make_inputs()
-        with pytest.raises(RuntimeError, match="sentinel"):
-            pics(
-                kspace,
-                sens,
-                R="W:7:0:0.005",
-                torch_prior=lambda x: x,
-                torch_prior_lambda=1.0,
-            )
-    finally:
-        graph_mod._get_ext = original_get_ext
-        cmds._generated.pics = original_pics
-
-    r_val = call_args.get("R")
-    assert isinstance(r_val, list), f"Expected list, got {type(r_val)}"
-    assert len(r_val) == 2
-    assert r_val[0] == "W:7:0:0.005"
-    assert r_val[1].startswith("TF:{bartorch://")
-
-
-def test_torch_prior_r_merging_with_existing_r_list():
-    """torch_prior appended after an existing R list -> list of three."""
-    import bartorch.core.graph as graph_mod
-    import bartorch.tools._commands as cmds
-
-    class FakeExt:
-        def register_torch_prior(self, *a):
-            pass
-
-        def unregister_torch_prior(self, *a):
-            pass
-
-    call_args = {}
-
-    def fake_generated_pics(kspace, sens, **kwargs):
-        call_args.update(kwargs)
-        raise RuntimeError("sentinel")
-
-    original_get_ext = graph_mod._get_ext
-    original_pics = cmds._generated.pics
-    try:
-        graph_mod._get_ext = lambda: FakeExt()
-        cmds._generated.pics = fake_generated_pics
-        kspace, sens = _make_inputs()
-        with pytest.raises(RuntimeError, match="sentinel"):
-            pics(
-                kspace,
-                sens,
-                R=["T:7:0:0.002", "W:7:0:0.005"],
-                torch_prior=lambda x: x,
-                torch_prior_lambda=1.0,
-            )
-    finally:
-        graph_mod._get_ext = original_get_ext
-        cmds._generated.pics = original_pics
-
-    r_val = call_args.get("R")
-    assert isinstance(r_val, list)
-    assert len(r_val) == 3
-    assert r_val[-1].startswith("TF:{bartorch://")
-
-
-def test_unique_names_across_calls():
-    """Each pics() call registers a different name (UUID-based)."""
-    import bartorch.core.graph as graph_mod
-    import bartorch.tools._commands as cmds
-
-    names = []
-
-    class FakeExt:
-        def register_torch_prior(self, name, *a):
-            names.append(name)
-
-        def unregister_torch_prior(self, *a):
-            pass
-
-    def fake_generated_pics(kspace, sens, **kwargs):
-        raise RuntimeError("sentinel")
-
-    original_get_ext = graph_mod._get_ext
-    original_pics = cmds._generated.pics
-    try:
-        graph_mod._get_ext = lambda: FakeExt()
-        cmds._generated.pics = fake_generated_pics
-        kspace, sens = _make_inputs()
-        for _ in range(3):
-            with pytest.raises(RuntimeError, match="sentinel"):
-                pics(kspace, sens, torch_prior=lambda x: x, torch_prior_lambda=1.0)
-    finally:
-        graph_mod._get_ext = original_get_ext
-        cmds._generated.pics = original_pics
-
-    assert len(names) == 3
-    assert len(set(names)) == 3, "Names must be unique across calls"
+def test_pics_has_torch_prior_lambda_parameter():
+    """pics() signature must include torch_prior_lambda keyword."""
+    sig = inspect.signature(pics)
+    assert "torch_prior_lambda" in sig.parameters

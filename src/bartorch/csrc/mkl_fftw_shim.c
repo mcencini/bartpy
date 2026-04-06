@@ -23,44 +23,29 @@
  *
  * MKL DFTI handles threading natively; no per-plan thread count is needed.
  *
- * Strides convention
- * ------------------
- * FFTW guru64: is/os are element strides (complex float = 1 element).
- *   dims[0] = innermost transform dim (stride = 1 for contiguous arrays)
- *   dims[k-1] = outermost transform dim (largest stride)
+ * Contiguous-buffer strategy
+ * --------------------------
+ * MKL DFTI silently produces wrong results when given non-standard stride
+ * patterns (e.g. ecalib's compute_imgcov uses stride-permuted FFTs with
+ * output strides like {132, 1584} instead of contiguous {1, 12}).
  *
- * DFTI strides: strides[0] = first-element offset, strides[j] = element
- *               stride of j-th dimension (1-indexed, outermost first).
+ * To ensure correctness for all stride patterns:
+ * - The DFTI descriptor ALWAYS uses contiguous strides.
+ * - At execute time, we gather non-contiguous input into a contiguous temp
+ *   buffer, execute DFTI on contiguous buffers, then scatter the contiguous
+ *   output back to the non-contiguous destination.
+ * - For the common case (both input and output are contiguous), the
+ *   gather/scatter is skipped and DFTI operates directly on the user buffers.
  *
- * Key difference: DFTI's strides[1] is the OUTERMOST dimension, while
- * FFTW's dims[0] is the INNERMOST dimension.  Since MKL DFTI requires
- * strides[j] >= lengths[j+1] * strides[j+1] (no overlapping rows), we
- * keep the FFTW/BART ordering (strides[0] maps to BART's innermost dim)
- * which satisfies this constraint for BART's standard Fortran-order layout:
- *   lengths = {dims[0].n, dims[1].n, ...}  (innermost first)
- *   strides = {0, dims[0].is, dims[1].is, ...}
- *   → strides[j+1] = dims[j].is = prod(dims[0..j-1].n) >= dims[j].n * strides[j]
- *     is TRUE for standard contiguous Fortran layout.
+ * In-place transforms (in == out):
+ * BART's fftmod calls fftwf_execute_dft(plan, ptr, ptr) with in==out.
+ * MKL DFTI with DFTI_NOT_INPLACE forbids aliased buffers.  We always
+ * use a temp input buffer when in==out (via gather or memcpy).
  *
- * Batched transforms (ntrans > 1)
- * --------------------------------
- * MKL DFTI's DFTI_NUMBER_OF_TRANSFORMS with non-rectangular strides fails the
- * consistency check (DftiCommitDescriptor returns
- * DFTI_INCONSISTENT_CONFIGURATION).  To avoid this, we store ntrans, idist,
- * odist in the plan and execute individual transforms in a loop at call time.
- * Each individual transform uses a single-transform DFTI descriptor (ntrans=1
- * in DFTI terms), so the consistency check always passes.
- *
- * For a batched transform with n transforms:
- *   transform i: input  at in  + i * idist
- *                output at out + i * odist
- *
- * In-place transforms (in == out)
- * ---------------------------------
- * MKL DFTI with DFTI_NOT_INPLACE does NOT permit aliased input/output.
- * BART's fftmod calls fftwf_execute_dft(plan, ptr, ptr) (in == out).
- * We handle this by copying the entire input to a temp buffer first,
- * then computing out-of-place from the temp to the original buffer.
+ * Batched transforms (multi-dimensional howmany):
+ * BART can pass multiple howmany dimensions with n > 1.  We handle this
+ * by iterating over ALL howmany index combinations, computing the correct
+ * input/output offsets from the per-dimension strides.
  */
 
 #include <stdlib.h>
@@ -80,16 +65,27 @@ typedef struct {
     MKL_LONG          os;
 } _bt_iodim64;
 
+/* Howmany dimension descriptor */
+typedef struct {
+    MKL_LONG n;   /* size */
+    MKL_LONG is;  /* input stride */
+    MKL_LONG os;  /* output stride */
+} _bt_hmdim;
+
 /* Internal plan struct that wraps a DFTI descriptor */
 typedef struct {
     DFTI_DESCRIPTOR_HANDLE  desc;
-    int                     sign;     /* FFTW_FORWARD=-1, FFTW_BACKWARD=+1 */
-    size_t                  span;     /* element count covering ONE input transform
-                                       * (max_offset + 1 over transform dims only).
-                                       * Used to size temp buffer for in-place execute. */
-    MKL_LONG                ntrans;   /* number of transforms (batch size) */
-    MKL_LONG                idist;    /* element stride between input transforms */
-    MKL_LONG                odist;    /* element stride between output transforms */
+    int                     sign;         /* FFTW_FORWARD=-1, FFTW_BACKWARD=+1 */
+    MKL_LONG                ntrans;       /* total number of transforms */
+    int                     l;            /* number of howmany dimensions */
+    _bt_hmdim              *hmdims;       /* [l] howmany dimensions */
+    int                     k;            /* number of transform dimensions */
+    MKL_LONG               *lengths;      /* [k] transform dim sizes */
+    MKL_LONG               *istrides;     /* [k] input element strides */
+    MKL_LONG               *ostrides;     /* [k] output element strides */
+    size_t                  nel;          /* product of transform dim sizes */
+    int                     need_gather;  /* input strides are non-contiguous */
+    int                     need_scatter; /* output strides are non-contiguous */
 } _bt_plan;
 
 /* ─── Helpers ──────────────────────────────────────────────────────────── */
@@ -97,96 +93,153 @@ typedef struct {
 static inline void _bt_check(MKL_LONG status, const char *where)
 {
     if (status != DFTI_NO_ERROR) {
-        /* BART's assert() macro calls error() and longjmps on failure;
-         * here we just abort with a message since we're in C not in BART's
-         * error-handling scope. */
         fprintf(stderr, "bartorch mkl_fftw_shim: DFTI error in %s: %s\n",
                 where, DftiErrorMessage(status));
         abort();
     }
 }
 
-/* ─── Main plan creation shim ──────────────────────────────────────────── */
+/*
+ * Check if strides form a contiguous innermost-first layout:
+ *   strides[0] == 1
+ *   strides[j] == product(lengths[0..j-1])  for j > 0
+ */
+static int _is_contiguous(int k, const MKL_LONG *lengths, const MKL_LONG *strides)
+{
+    MKL_LONG expected = 1;
+    for (int i = 0; i < k; i++) {
+        if (strides[i] != expected) return 0;
+        expected *= lengths[i];
+    }
+    return 1;
+}
 
 /*
- * Signature mirrors FFTW3's fftwf_plan_guru64_dft.
- * The __real_ prefix is the GNU linker --wrap symbol for the original.
- * We implement __wrap_ which is called instead.
+ * Gather from strided layout to contiguous buffer.
+ * For each element in contiguous order, compute the strided offset.
  */
+static void _gather(float _Complex *dst, const float _Complex *src,
+                    int k, const MKL_LONG *lengths, const MKL_LONG *strides,
+                    size_t nel)
+{
+    for (size_t idx = 0; idx < nel; idx++) {
+        size_t rem = idx;
+        MKL_LONG offset = 0;
+        for (int d = 0; d < k; d++) {
+            MKL_LONG coord = (MKL_LONG)(rem % (size_t)lengths[d]);
+            rem /= (size_t)lengths[d];
+            offset += coord * strides[d];
+        }
+        dst[idx] = src[offset];
+    }
+}
+
+/*
+ * Scatter from contiguous buffer to strided layout.
+ */
+static void _scatter(float _Complex *dst, const float _Complex *src,
+                     int k, const MKL_LONG *lengths, const MKL_LONG *strides,
+                     size_t nel)
+{
+    for (size_t idx = 0; idx < nel; idx++) {
+        size_t rem = idx;
+        MKL_LONG offset = 0;
+        for (int d = 0; d < k; d++) {
+            MKL_LONG coord = (MKL_LONG)(rem % (size_t)lengths[d]);
+            rem /= (size_t)lengths[d];
+            offset += coord * strides[d];
+        }
+        dst[offset] = src[idx];
+    }
+}
+
+/*
+ * Compute the input and output base offsets for transform index `tr`.
+ * The howmany dimensions form a multi-index: for flat index `tr`,
+ * decompose into (j0, j1, ..., j_{l-1}) and sum j_d * stride_d.
+ */
+static void _compute_offsets(MKL_LONG tr, int l, const _bt_hmdim *hm,
+                             MKL_LONG *in_off, MKL_LONG *out_off)
+{
+    MKL_LONG ioff = 0, ooff = 0;
+    MKL_LONG rem = tr;
+    for (int d = 0; d < l; d++) {
+        MKL_LONG coord = rem % hm[d].n;
+        rem /= hm[d].n;
+        ioff += coord * hm[d].is;
+        ooff += coord * hm[d].os;
+    }
+    *in_off  = ioff;
+    *out_off = ooff;
+}
+
+/* ─── Main plan creation shim ──────────────────────────────────────────── */
+
 void *__wrap_fftwf_plan_guru64_dft(
-    int                    k,        /* number of transform dimensions */
-    const _bt_iodim64     *dims,     /* transform dims: n, is, os per dim */
-    int                    l,        /* number of howmany (batch) dims */
-    const _bt_iodim64     *hmdims,   /* batch dims: n, is, os per dim */
-    float _Complex        *in,       /* input buffer (planning) — ignored for DFTI */
-    float _Complex        *out,      /* output buffer (planning) — ignored for DFTI */
-    int                    sign,     /* -1 = forward, +1 = backward */
-    unsigned               flags)    /* FFTW_ESTIMATE etc. — ignored */
+    int                    k,
+    const _bt_iodim64     *dims,
+    int                    l,
+    const _bt_iodim64     *hmdims,
+    float _Complex        *in,
+    float _Complex        *out,
+    int                    sign,
+    unsigned               flags)
 {
     (void)in; (void)out; (void)flags;
 
     if (k <= 0) return NULL;
 
-    /* ── Compute number_of_transforms and batch distances ──────────────── */
-    /*
-     * ntrans = product of all batch dim sizes.
-     * idist/odist = element stride between consecutive transforms.
-     *
-     * For BART's standard Fortran-order layout, transforms are contiguous
-     * and separated by the stride of the first batch dim with n > 1.
-     * If all batch dims have n == 1 (single transform), ntrans = 1.
-     */
+    /* ── Compute total number of transforms ────────────────────────────── */
     MKL_LONG ntrans = 1;
     for (int i = 0; i < l; i++)
         ntrans *= (MKL_LONG)hmdims[i].n;
 
-    /*
-     * Inter-transform distance: use the .is/.os of the first batch dimension
-     * that has n > 1.  For all-trivial batch dims (ntrans == 1) the distance
-     * is irrelevant; we leave it as 0 (will not be used).
-     */
-    MKL_LONG idist = 0;
-    MKL_LONG odist = 0;
-    if (ntrans > 1) {
+    /* ── Store howmany dimensions ──────────────────────────────────────── */
+    _bt_hmdim *hm = NULL;
+    if (l > 0) {
+        hm = (_bt_hmdim *)malloc((size_t)l * sizeof(_bt_hmdim));
+        if (!hm) return NULL;
         for (int i = 0; i < l; i++) {
-            if (hmdims[i].n > 1) {
-                idist = (MKL_LONG)hmdims[i].is;
-                odist = (MKL_LONG)hmdims[i].os;
-                break;
-            }
+            hm[i].n  = (MKL_LONG)hmdims[i].n;
+            hm[i].is = (MKL_LONG)hmdims[i].is;
+            hm[i].os = (MKL_LONG)hmdims[i].os;
         }
     }
 
-    /* ── Build dimension arrays for DFTI ───────────────────────────────── */
-    /*
-     * DFTI strides: strides[0] = first-element offset (always 0),
-     *   strides[j+1] = element stride of dims[j] (innermost first).
-     *
-     * We keep BART/FFTW3's dim ordering (dims[0] = innermost = smallest
-     * stride).  MKL DFTI accepts this for single-transform descriptors
-     * (DFTI_NUMBER_OF_TRANSFORMS = 1, the default), because the consistency
-     * check only becomes strict when batch parameters are set.  Since we
-     * handle batching ourselves in __wrap_fftwf_execute_dft, the descriptor
-     * always describes exactly one transform and the check always passes.
-     */
-    MKL_LONG *lengths    = (MKL_LONG *)malloc((size_t)k * sizeof(MKL_LONG));
-    MKL_LONG *istrides   = (MKL_LONG *)malloc((size_t)(k + 1) * sizeof(MKL_LONG));
-    MKL_LONG *ostrides   = (MKL_LONG *)malloc((size_t)(k + 1) * sizeof(MKL_LONG));
+    /* ── Extract dim sizes and strides from FFTW dims ──────────────────── */
+    MKL_LONG *lengths  = (MKL_LONG *)malloc((size_t)k * sizeof(MKL_LONG));
+    MKL_LONG *istrides = (MKL_LONG *)malloc((size_t)k * sizeof(MKL_LONG));
+    MKL_LONG *ostrides = (MKL_LONG *)malloc((size_t)k * sizeof(MKL_LONG));
 
     if (!lengths || !istrides || !ostrides) {
-        free(lengths); free(istrides); free(ostrides);
+        free(lengths); free(istrides); free(ostrides); free(hm);
         return NULL;
     }
 
-    istrides[0] = 0;
-    ostrides[0] = 0;
+    size_t nel = 1;
     for (int i = 0; i < k; i++) {
-        lengths[i]       = (MKL_LONG)dims[i].n;
-        istrides[i + 1]  = (MKL_LONG)dims[i].is;
-        ostrides[i + 1]  = (MKL_LONG)dims[i].os;
+        lengths[i]  = (MKL_LONG)dims[i].n;
+        istrides[i] = (MKL_LONG)dims[i].is;
+        ostrides[i] = (MKL_LONG)dims[i].os;
+        nel *= (size_t)dims[i].n;
     }
 
-    /* ── Create DFTI descriptor (single transform — no batch params) ───── */
+    int need_gather  = !_is_contiguous(k, lengths, istrides);
+    int need_scatter = !_is_contiguous(k, lengths, ostrides);
+
+    /* ── Build DFTI descriptor with CONTIGUOUS strides ─────────────────── */
+    MKL_LONG *contig_strides = (MKL_LONG *)malloc((size_t)(k + 1) * sizeof(MKL_LONG));
+    if (!contig_strides) {
+        free(lengths); free(istrides); free(ostrides); free(hm);
+        return NULL;
+    }
+    contig_strides[0] = 0;  /* first-element offset */
+    MKL_LONG stride = 1;
+    for (int i = 0; i < k; i++) {
+        contig_strides[i + 1] = stride;
+        stride *= lengths[i];
+    }
+
     DFTI_DESCRIPTOR_HANDLE desc = NULL;
     MKL_LONG status;
 
@@ -198,65 +251,63 @@ void *__wrap_fftwf_plan_guru64_dft(
                                       (MKL_LONG)k, lengths);
     }
 
-    free(lengths);
-
     if (status != DFTI_NO_ERROR) {
-        free(istrides); free(ostrides);
+        free(lengths); free(istrides); free(ostrides);
+        free(contig_strides); free(hm);
         return NULL;
     }
 
-    /* Set strides */
-    status = DftiSetValue(desc, DFTI_INPUT_STRIDES, istrides);
+    /* Set contiguous strides for both input and output */
+    status = DftiSetValue(desc, DFTI_INPUT_STRIDES, contig_strides);
     if (status != DFTI_NO_ERROR) {
-        free(istrides); free(ostrides);
+        free(lengths); free(istrides); free(ostrides);
+        free(contig_strides); free(hm);
         DftiFreeDescriptor(&desc);
         return NULL;
     }
-    status = DftiSetValue(desc, DFTI_OUTPUT_STRIDES, ostrides);
-    free(istrides); free(ostrides);
+    status = DftiSetValue(desc, DFTI_OUTPUT_STRIDES, contig_strides);
+    free(contig_strides);
     if (status != DFTI_NO_ERROR) {
+        free(lengths); free(istrides); free(ostrides); free(hm);
         DftiFreeDescriptor(&desc);
         return NULL;
     }
 
-    /* Out-of-place transform (we copy to temp when in == out at execute time) */
+    /* Always out-of-place */
     status = DftiSetValue(desc, DFTI_PLACEMENT, DFTI_NOT_INPLACE);
-    if (status != DFTI_NO_ERROR) { DftiFreeDescriptor(&desc); return NULL; }
+    if (status != DFTI_NO_ERROR) {
+        free(lengths); free(istrides); free(ostrides); free(hm);
+        DftiFreeDescriptor(&desc);
+        return NULL;
+    }
 
     /* Commit */
     status = DftiCommitDescriptor(desc);
     if (status != DFTI_NO_ERROR) {
+        free(lengths); free(istrides); free(ostrides); free(hm);
         DftiFreeDescriptor(&desc);
         return NULL;
     }
-
-    /* ── Compute span of ONE transform (for in-place temp buffer) ──────── */
-    /*
-     * span = max element offset reachable within a single transform + 1.
-     * span = 1 + sum_d((dims[d].n - 1) * dims[d].is)
-     *
-     * This covers the input buffer of one transform.  When in == out (global
-     * in-place), we copy span elements before executing, so this is the
-     * minimum temp buffer size per transform.
-     */
-    MKL_LONG max_off = 0;
-    for (int i = 0; i < k; i++)
-        max_off += (MKL_LONG)(dims[i].n - 1) * dims[i].is;
-    /* Guard against negative max_off (degenerate all-size-1 plans). */
-    size_t span = (max_off < 0) ? 1 : (size_t)(max_off + 1);
 
     /* ── Wrap in our plan struct ────────────────────────────────────────── */
     _bt_plan *plan = (_bt_plan *)malloc(sizeof(_bt_plan));
     if (!plan) {
+        free(lengths); free(istrides); free(ostrides); free(hm);
         DftiFreeDescriptor(&desc);
         return NULL;
     }
-    plan->desc   = desc;
-    plan->sign   = sign;
-    plan->span   = span;
-    plan->ntrans = ntrans;
-    plan->idist  = idist;
-    plan->odist  = odist;
+    plan->desc         = desc;
+    plan->sign         = sign;
+    plan->ntrans       = ntrans;
+    plan->l            = l;
+    plan->hmdims       = hm;
+    plan->k            = k;
+    plan->lengths      = lengths;
+    plan->istrides     = istrides;
+    plan->ostrides     = ostrides;
+    plan->nel          = nel;
+    plan->need_gather  = need_gather;
+    plan->need_scatter = need_scatter;
     return (void *)plan;
 }
 
@@ -267,68 +318,119 @@ void __wrap_fftwf_execute_dft(void *_plan, float _Complex *in, float _Complex *o
     _bt_plan *plan = (_bt_plan *)_plan;
     assert(plan && plan->desc);
 
-    MKL_LONG status = DFTI_NO_ERROR;
+    size_t nel = plan->nel;
+    int inplace = (in == out);
 
     /*
-     * MKL DFTI with DFTI_NOT_INPLACE does NOT permit aliased input/output.
-     * BART's fftmod frequently calls fftwf_execute_dft(plan, ptr, ptr).
-     *
-     * We handle this globally: if in == out, copy the entire multi-transform
-     * input to a temporary buffer (size = ntrans * idist or span for ntrans=1),
-     * then execute each sub-transform out-of-place from temp into the original.
-     *
-     * For ntrans > 1 we loop over individual transforms explicitly, advancing
-     * the input/output pointers by idist/odist.  This avoids the DFTI batch
-     * API (DFTI_NUMBER_OF_TRANSFORMS + DFTI_INPUT_DISTANCE) which fails the
-     * consistency check for BART's non-rectangular Fortran-order strides.
+     * Determine if we need temp buffers:
+     * - temp_in:  needed if input strides are non-contiguous OR in-place
+     * - temp_out: needed if output strides are non-contiguous
      */
+    int use_temp_in  = plan->need_gather || inplace;
+    int use_temp_out = plan->need_scatter;
 
-    if (in == out) {
-        /*
-         * Compute total size needed to buffer all transforms.
-         * For ntrans==1: size = span.
-         * For ntrans>1:  the last transform ends at (ntrans-1)*idist + span,
-         *               but we only need to buffer the full input range.
-         * Use: total_span = (ntrans - 1) * idist + span  (last transform's end)
-         */
-        size_t total;
-        if (plan->ntrans <= 1 || plan->idist <= 0) {
-            total = plan->span;
-        } else {
-            total = (size_t)((plan->ntrans - 1) * plan->idist) + plan->span;
+    /*
+     * In-place hazard: when in == out and the output strides differ from
+     * the input strides, scattering the output of sub-transform i can
+     * overwrite input data needed by sub-transform j (j > i).
+     *
+     * Fix: when in == out, copy the ENTIRE input buffer upfront so all
+     * subsequent gathers read from the safe copy.  We compute the total
+     * span of all transforms (max offset over all howmany combinations
+     * plus the per-transform span).
+     */
+    float _Complex *in_safe = in;  /* points to safe (unmodified) input */
+    float _Complex *in_copy = NULL;
+    if (inplace && plan->ntrans > 0) {
+        /* Compute total input span covering all sub-transforms */
+        MKL_LONG max_hm_off = 0;
+        for (int d = 0; d < plan->l; d++) {
+            if (plan->hmdims[d].n > 1)
+                max_hm_off += (plan->hmdims[d].n - 1) * plan->hmdims[d].is;
         }
+        MKL_LONG max_xf_off = 0;
+        for (int d = 0; d < plan->k; d++)
+            max_xf_off += (plan->lengths[d] - 1) * plan->istrides[d];
 
-        float _Complex *tmp = (float _Complex *)malloc(total * sizeof(float _Complex));
-        if (!tmp) {
-            fprintf(stderr,
-                    "bartorch mkl_fftw_shim: failed to allocate %zu-element temp buffer "
-                    "for in-place FFT\n", total);
+        size_t total_span = (size_t)(max_hm_off + max_xf_off) + 1;
+        in_copy = (float _Complex *)malloc(total_span * sizeof(float _Complex));
+        if (!in_copy) {
+            fprintf(stderr, "bartorch mkl_fftw_shim: alloc failed (in_copy, %zu)\n", total_span);
             abort();
         }
-        memcpy(tmp, in, total * sizeof(float _Complex));
+        memcpy(in_copy, in, total_span * sizeof(float _Complex));
+        in_safe = in_copy;
+    }
 
-        for (MKL_LONG tr = 0; tr < plan->ntrans; tr++) {
-            float _Complex *tmp_tr = tmp + tr * plan->idist;
-            float _Complex *out_tr = out + tr * plan->odist;
-            if (plan->sign == -1)
-                status = DftiComputeForward(plan->desc, (void *)tmp_tr, (void *)out_tr);
-            else
-                status = DftiComputeBackward(plan->desc, (void *)tmp_tr, (void *)out_tr);
-            if (status != DFTI_NO_ERROR) break;
-        }
-        free(tmp);
-    } else {
-        /* Standard out-of-place path: loop over individual transforms. */
-        for (MKL_LONG tr = 0; tr < plan->ntrans; tr++) {
-            float _Complex *in_tr  = in  + tr * plan->idist;
-            float _Complex *out_tr = out + tr * plan->odist;
-            if (plan->sign == -1)
-                status = DftiComputeForward(plan->desc, (void *)in_tr, (void *)out_tr);
-            else
-                status = DftiComputeBackward(plan->desc, (void *)in_tr, (void *)out_tr);
-            if (status != DFTI_NO_ERROR) break;
+    float _Complex *temp_in  = NULL;
+    float _Complex *temp_out = NULL;
+
+    if (use_temp_in) {
+        temp_in = (float _Complex *)malloc(nel * sizeof(float _Complex));
+        if (!temp_in) {
+            fprintf(stderr, "bartorch mkl_fftw_shim: alloc failed (temp_in, %zu)\n", nel);
+            abort();
         }
     }
+    if (use_temp_out) {
+        temp_out = (float _Complex *)malloc(nel * sizeof(float _Complex));
+        if (!temp_out) {
+            free(temp_in); free(in_copy);
+            fprintf(stderr, "bartorch mkl_fftw_shim: alloc failed (temp_out, %zu)\n", nel);
+            abort();
+        }
+    }
+
+    MKL_LONG status = DFTI_NO_ERROR;
+
+    for (MKL_LONG tr = 0; tr < plan->ntrans; tr++) {
+        /* Compute offsets for this sub-transform using all howmany dims */
+        MKL_LONG in_off = 0, out_off = 0;
+        _compute_offsets(tr, plan->l, plan->hmdims, &in_off, &out_off);
+
+        float _Complex *in_tr  = in_safe + in_off;
+        float _Complex *out_tr = out     + out_off;
+
+        float _Complex *dfti_in;
+        float _Complex *dfti_out;
+
+        /* Prepare DFTI input (must be contiguous) */
+        if (use_temp_in) {
+            if (plan->need_gather || inplace) {
+                _gather(temp_in, in_tr, plan->k, plan->lengths,
+                        plan->istrides, nel);
+            } else {
+                memcpy(temp_in, in_tr, nel * sizeof(float _Complex));
+            }
+            dfti_in = temp_in;
+        } else {
+            dfti_in = in_tr;
+        }
+
+        /* Prepare DFTI output (must be contiguous) */
+        if (use_temp_out) {
+            dfti_out = temp_out;
+        } else {
+            dfti_out = out_tr;
+        }
+
+        /* Execute single transform */
+        if (plan->sign == -1)
+            status = DftiComputeForward(plan->desc, (void *)dfti_in, (void *)dfti_out);
+        else
+            status = DftiComputeBackward(plan->desc, (void *)dfti_in, (void *)dfti_out);
+        if (status != DFTI_NO_ERROR) break;
+
+        /* Scatter output if needed */
+        if (use_temp_out) {
+            _scatter(out_tr, temp_out, plan->k, plan->lengths,
+                     plan->ostrides, nel);
+        }
+    }
+
+    free(temp_in);
+    free(temp_out);
+    free(in_copy);
 
     _bt_check(status, "fftwf_execute_dft");
 }
@@ -340,6 +442,10 @@ void __wrap_fftwf_destroy_plan(void *_plan)
     if (!_plan) return;
     _bt_plan *plan = (_bt_plan *)_plan;
     DftiFreeDescriptor(&plan->desc);
+    free(plan->lengths);
+    free(plan->istrides);
+    free(plan->ostrides);
+    free(plan->hmdims);
     free(plan);
 }
 

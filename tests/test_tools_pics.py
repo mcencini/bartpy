@@ -116,8 +116,9 @@ class TestBartImgDimsFromKspace:
 class TestPicsTorchPriorValidation:
     """Argument-validation tests for pics(…, torch_prior=fn).
 
-    All tests use monkey-patching so they do not call into the C++ extension
-    and do not require real kspace / sensitivity-map data.
+    Tests inspect function signatures or use monkey-patching so they do not
+    call into the C++ extension and do not require real kspace / sensitivity-map
+    data.
     """
 
     @staticmethod

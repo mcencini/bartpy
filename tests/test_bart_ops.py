@@ -309,13 +309,12 @@ def test_ecalib_runs_and_returns_tensor():
 
 
 def test_ecalib_coil_count():
-    """bt.ecalib output contains one set of maps per coil (8 coils → nc=8)."""
+    """bt.ecalib output has C-order shape (maps, nc, nz, ny, nx) = (1, 8, 1, 128, 128)."""
     ksp = bt.phantom([128, 128], kspace=True, ncoils=8)
     sens = bt.ecalib(ksp, maps=1)
-    # Sensitivity map tensor: BART Fortran dims (nx, ny, nz, nc, maps)
-    # → C-order (maps, nc, nz, ny, nx) = (1, 8, 1, 128, 128)
-    # Total voxels = nx * ny * nc * maps = 128 * 128 * 8 * 1
-    assert sens.numel() == 128 * 128 * 8 * 1
+    # BART Fortran order: (nx, ny, nz, nc, maps) = (128, 128, 1, 8, 1)
+    # C-order (reversed):                          (1,   8,  1, 128, 128)
+    assert sens.shape == torch.Size([1, 8, 1, 128, 128])
 
 
 def test_ecalib_nonzero():

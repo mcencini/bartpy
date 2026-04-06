@@ -54,7 +54,7 @@ from bartorch.tools import _generated
 # follow shadow the generated versions of the same name.
 from bartorch.tools._generated import *  # noqa: F401,F403
 from bartorch.tools._generated import __all__ as _generated_all
-from bartorch.utils.flags import axes_to_flags
+from bartorch.utils.flags import _axes_to_flags
 
 __all__ = [*_generated_all, "ifft"]
 
@@ -168,7 +168,7 @@ def fft(
     >>> ph = bt.phantom([256, 256])
     >>> kspace = bt.fft(ph, axes=(-1, -2))   # 2-D FFT over last two axes
     """
-    bitmask = axes_to_flags(axes, ndim=input_.ndim)
+    bitmask = _axes_to_flags(axes, ndim=input_.ndim)
     return _generated.fft(
         input_,
         bitmask,
@@ -905,7 +905,7 @@ def nufft(
 # Every BART command whose first positional scalar argument is a bitmask
 # (selecting dimensions by set-bits) is wrapped here so that callers pass
 # C-order *axis indices* instead.  The conversion to a BART bitmask is done
-# internally via ``axes_to_flags(axes, ndim=input_.ndim)``.
+# internally via ``_axes_to_flags(axes, ndim=input_.ndim)``.
 #
 # Commands covered: avg, cdf97, conv, fftmod, fftshift, flip, hist, mip,
 #                   rss, std, var, wavelet
@@ -938,7 +938,7 @@ def avg(
     """
     return _generated.avg(
         input_,
-        axes_to_flags(axes, ndim=input_.ndim),
+        _axes_to_flags(axes, ndim=input_.ndim),
         output_dims=output_dims,
         w=w or None,
         **extra_flags,
@@ -970,7 +970,7 @@ def cdf97(
     """
     return _generated.cdf97(
         input_,
-        axes_to_flags(axes, ndim=input_.ndim),
+        _axes_to_flags(axes, ndim=input_.ndim),
         output_dims=output_dims,
         i=i or None,
         **extra_flags,
@@ -1004,7 +1004,7 @@ def conv(
     return _generated.conv(
         input_,
         kernel,
-        axes_to_flags(axes, ndim=input_.ndim),
+        _axes_to_flags(axes, ndim=input_.ndim),
         output_dims=output_dims,
         **extra_flags,
     )
@@ -1038,7 +1038,7 @@ def fftmod(
     """
     return _generated.fftmod(
         input_,
-        axes_to_flags(axes, ndim=input_.ndim),
+        _axes_to_flags(axes, ndim=input_.ndim),
         output_dims=output_dims,
         b=b or None,
         i=i or None,
@@ -1071,7 +1071,7 @@ def fftshift(
     """
     return _generated.fftshift(
         input_,
-        axes_to_flags(axes, ndim=input_.ndim),
+        _axes_to_flags(axes, ndim=input_.ndim),
         output_dims=output_dims,
         b=b or None,
         **extra_flags,
@@ -1106,7 +1106,7 @@ def flip(
     """
     return _generated.flip(
         input_,
-        axes_to_flags(axes, ndim=input_.ndim),
+        _axes_to_flags(axes, ndim=input_.ndim),
         output_dims=output_dims,
         **extra_flags,
     )
@@ -1140,7 +1140,7 @@ def hist(
     """
     return _generated.hist(
         input_,
-        axes_to_flags(axes, ndim=input_.ndim),
+        _axes_to_flags(axes, ndim=input_.ndim),
         output_dims=output_dims,
         c=c or None,
         s=s,
@@ -1177,7 +1177,7 @@ def mip(
     """
     return _generated.mip(
         input_,
-        axes_to_flags(axes, ndim=input_.ndim),
+        _axes_to_flags(axes, ndim=input_.ndim),
         output_dims=output_dims,
         m=m or None,
         a=a or None,
@@ -1214,7 +1214,7 @@ def rss(
     """
     return _generated.rss(
         input_,
-        axes_to_flags(axes, ndim=input_.ndim),
+        _axes_to_flags(axes, ndim=input_.ndim),
         output_dims=output_dims,
         **extra_flags,
     )
@@ -1242,7 +1242,7 @@ def std(
     """
     return _generated.std(
         input_,
-        axes_to_flags(axes, ndim=input_.ndim),
+        _axes_to_flags(axes, ndim=input_.ndim),
         output_dims=output_dims,
         **extra_flags,
     )
@@ -1270,7 +1270,7 @@ def var(
     """
     return _generated.var(
         input_,
-        axes_to_flags(axes, ndim=input_.ndim),
+        _axes_to_flags(axes, ndim=input_.ndim),
         output_dims=output_dims,
         **extra_flags,
     )
@@ -1301,7 +1301,7 @@ def wavelet(
     """
     return _generated.wavelet(
         input_,
-        axes_to_flags(axes, ndim=input_.ndim),
+        _axes_to_flags(axes, ndim=input_.ndim),
         output_dims=output_dims,
         a=a or None,
         **extra_flags,

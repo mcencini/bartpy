@@ -4,9 +4,9 @@ bartorch.utils — Utility functions.
 CFL read/write for NumPy workflows.
 
 .. note::
-    :func:`~bartorch.utils.flags.axes_to_flags` is an internal helper used by
-    the ``bartorch.tools`` wrappers.  It is not part of the public API; import
-    it from :mod:`bartorch.utils.flags` if you need it directly.
+    :func:`~bartorch.utils.flags._axes_to_flags` is an internal helper used
+    by ``bartorch.tools`` wrappers to convert C-order axis indices to BART
+    Fortran-order bitmasks.  It is **not** part of the public API.
 """
 
 from __future__ import annotations

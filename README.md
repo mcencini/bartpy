@@ -123,7 +123,7 @@ bartorch/
 │   └── _commands.py    Pythonic overrides (fft/ifft, ecalib, caldir, pics,
 │                       nlinv, moba, nufft) — delegate to generated functions
 ├── core/          Dispatch graph, BartContext, dtype normalisation
-├── utils/         CFL read/write, axes_to_flags()
+├── utils/         CFL read/write (readcfl, writecfl)
 └── csrc/          PyTorch C++ extension (_bartorch_ext)
     ├── bartorch_ext.cpp     pybind11 module entry point
     ├── tensor_bridge.hpp    zero-copy CPU Tensor↔CFL

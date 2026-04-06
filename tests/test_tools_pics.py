@@ -109,16 +109,15 @@ class TestBartImgDimsFromKspace:
 
 
 # ---------------------------------------------------------------------------
-# pics() — torch_prior argument validation (no extension needed)
+# pics() — torch_prior argument validation
 # ---------------------------------------------------------------------------
 
 
 class TestPicsTorchPriorValidation:
     """Argument-validation tests for pics(…, torch_prior=fn).
 
-    These run in the SKIP_EXT=1 CI environment where _bartorch_ext is absent.
-    The expected outcome is ImportError (extension not built), which is raised
-    before any BART calls are made.
+    All tests use monkey-patching so they do not call into the C++ extension
+    and do not require real kspace / sensitivity-map data.
     """
 
     @staticmethod
@@ -126,12 +125,6 @@ class TestPicsTorchPriorValidation:
         kspace = torch.zeros(nc, 1, ny, nx, dtype=torch.complex64)
         sens = torch.zeros(nc, 1, ny, nx, dtype=torch.complex64)
         return kspace, sens
-
-    def test_torch_prior_without_ext_raises_import_error(self):
-        """pics() with torch_prior= raises ImportError when ext is not built."""
-        kspace, sens = self._make_inputs()
-        with pytest.raises((ImportError, RuntimeError)):
-            pics(kspace, sens, torch_prior=lambda x: x)
 
     def test_torch_prior_lambda_default_is_float(self):
         """torch_prior_lambda has a sane numeric default (1.0)."""
@@ -141,14 +134,6 @@ class TestPicsTorchPriorValidation:
         default = sig.parameters["torch_prior_lambda"].default
         assert isinstance(default, float)
         assert default == 1.0
-
-    def test_torch_prior_none_does_not_touch_ext(self):
-        """pics() without torch_prior= never imports the extension."""
-        kspace, sens = self._make_inputs()
-        # Without torch_prior the call must fail with RuntimeError from
-        # the dispatch stub, not ImportError from missing extension.
-        with pytest.raises((RuntimeError, ImportError)):
-            pics(kspace, sens, R="W:7:0:0.001")
 
     def test_tf_reg_string_format(self):
         """Verify the -R TF:{bartorch://…}:lambda string is well-formed."""

@@ -249,3 +249,106 @@ def test_conj_matches_torch():
     result = bt.conj(x)
     err = nrmse(result, x.conj())
     assert err < 1e-5, f"conj vs torch.conj nrmse={err:.2e}"
+
+
+# ---------------------------------------------------------------------------
+# scale
+# ---------------------------------------------------------------------------
+
+
+def test_scale_by_factor():
+    """bart scale multiplies every element by the given factor."""
+    x = bt.phantom([16, 16], x=16)
+    scaled = bt.scale(2.0, x)
+    err = nrmse(scaled, x * 2.0)
+    assert err < 1e-5, f"scale nrmse={err:.2e}"
+
+
+def test_scale_identity():
+    """bart scale by 1 is identity."""
+    x = bt.phantom([16, 16], x=16)
+    scaled = bt.scale(1.0, x)
+    err = nrmse(scaled, x)
+    assert err < 1e-6, f"scale-1 nrmse={err:.2e}"
+
+
+# ---------------------------------------------------------------------------
+# fmac (fused multiply-accumulate / Hadamard product)
+# ---------------------------------------------------------------------------
+
+
+def test_fmac_hadamard():
+    """bart fmac with no -s flag computes element-wise product."""
+    a = bt.phantom([16, 16], x=16)
+    b = bt.phantom([16, 16], x=16)
+    result = bt.fmac(a, b)
+    expected = a * b
+    err = nrmse(result, expected)
+    assert err < 1e-5, f"fmac nrmse={err:.2e}"
+
+
+# ---------------------------------------------------------------------------
+# ecalib — ported from bart/tests/ecalib.mk: test-ecalib
+# ---------------------------------------------------------------------------
+# BART test:
+#   ecalib -m1 shepplogan_coil_ksp.ra coils.ra
+#   pocsense -i1 shepplogan_coil_ksp.ra coils.ra proj.ra
+#   nrmse -t 0.05 proj.ra shepplogan_coil_ksp.ra
+#
+# Equivalent bartorch test: verify that ecalib runs without error on
+# Shepp-Logan coil k-space and returns sensitivity maps whose shape is
+# consistent with the input (nc coils, 1 map, same spatial dims).
+
+
+def test_ecalib_runs_and_returns_tensor():
+    """bt.ecalib returns a complex64 tensor for 8-coil phantom kspace."""
+    ksp = bt.phantom([128, 128], kspace=True, ncoils=8)
+    sens = bt.ecalib(ksp, maps=1)
+    assert isinstance(sens, torch.Tensor)
+    assert sens.dtype == torch.complex64
+
+
+def test_ecalib_coil_count():
+    """bt.ecalib output contains one set of maps per coil (8 coils → nc=8)."""
+    ksp = bt.phantom([128, 128], kspace=True, ncoils=8)
+    sens = bt.ecalib(ksp, maps=1)
+    # Sensitivity map tensor: BART Fortran dims (nx, ny, nz, nc, maps)
+    # → C-order (maps, nc, nz, ny, nx) = (1, 8, 1, 128, 128)
+    # Total voxels = nx * ny * nc * maps = 128 * 128 * 8 * 1
+    assert sens.numel() == 128 * 128 * 8 * 1
+
+
+def test_ecalib_nonzero():
+    """Sensitivity maps from non-trivial kspace must contain non-zero values."""
+    ksp = bt.phantom([128, 128], kspace=True, ncoils=8)
+    sens = bt.ecalib(ksp, maps=1)
+    assert sens.abs().max().item() > 0.0
+
+
+# ---------------------------------------------------------------------------
+# pics — ported from bart/tests/pics.mk: test-pics-pi
+# ---------------------------------------------------------------------------
+# BART test:
+#   pics -S -r0.001 shepplogan_coil_ksp.ra coils.ra reco.ra
+#   scale 128. reco.ra reco2.ra
+#   nrmse -t 0.23 reco2.ra shepplogan.ra
+#
+# Equivalent bartorch test: parallel-imaging reconstruction from 8-coil
+# phantom kspace with ESPIRiT sensitivity maps.  After BART's internal
+# scaling (-S) and an explicit 128× scale, nrmse vs. the ground-truth
+# Shepp-Logan phantom must be below 0.23.
+
+
+def test_pics_pi_reconstruction():
+    """
+    Ported from bart/tests/test-pics-pi.
+
+    pics -S -r0.001 ksp coils → scale 128 → nrmse(reco, phantom) < 0.23
+    """
+    img = bt.phantom([128, 128])
+    ksp = bt.phantom([128, 128], kspace=True, ncoils=8)
+    sens = bt.ecalib(ksp, maps=1)
+    reco = bt.pics(ksp, sens, lambda_=0.001, S=True)
+    reco_scaled = bt.scale(128.0, reco)
+    err = nrmse(reco_scaled, img)
+    assert err < 0.23, f"pics-pi nrmse={err:.4f}"

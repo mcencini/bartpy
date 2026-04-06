@@ -252,8 +252,6 @@ static py::object run(
     int saved_debug = debug_level;
     if (debug_level < 0 || debug_level > BARTORCH_DP_WARN)
         debug_level = BARTORCH_DP_WARN;
-    // TEMPORARY: enable full debug output for diagnosis
-    debug_level = 4;
 
     // ── 1. Register input tensors ──────────────────────────────────────────
     // Use a per-call counter in names so stale entries from a previous error
@@ -325,11 +323,6 @@ static py::object run(
     argv.push_back(nullptr);
     int argc = (int)parts.size();
 
-    // Debug: print argv
-    fprintf(stderr, "DEBUG bart_command argc=%d: ", argc);
-    for (int i = 0; i < argc; ++i) fprintf(stderr, "'%s' ", parts[i].c_str());
-    fprintf(stderr, "\n");
-
     char err_buf[512] = {'\0'};
     // Clear any pending Python exception before calling bart_command.
     // With BART_WITH_PYTHON, BART's error() calls PyErr_SetString, which sets
@@ -339,20 +332,6 @@ static py::object run(
     // state before the BART call.
     if (PyErr_Occurred()) PyErr_Clear();
     int  ret          = bart_command(sizeof(err_buf), err_buf, argc, argv.data());
-    fprintf(stderr, "DEBUG bart_command ret=%d err='%s'\n", ret, err_buf);
-    // Debug: immediately check the output CFL content right after bart_command
-    if (ret == 0 && want_cfl_output) {
-        long dbg_dims[BART_DIMS] = {0};
-        void* dbg_ptr = memcfl_load(output_name.c_str(), BART_DIMS, dbg_dims);
-        if (dbg_ptr) {
-            float* fp = (float*)dbg_ptr;
-            bool allzero = true;
-            for (int k = 0; k < 16; ++k) if (fp[k] != 0.f) { allzero = false; break; }
-            fprintf(stderr, "DEBUG post-bart output='%s' ptr=%p first=(%g,%g) allzero=%d\n",
-                    output_name.c_str(), dbg_ptr, fp[0], fp[1], (int)allzero);
-            memcfl_unmap(dbg_ptr);  // undo the load refcount increment
-        }
-    }
     // Capture the BART-set Python exception (if any) and clear it before
     // pybind11 sees it.  We propagate BART errors via ret != 0 / RuntimeError.
     std::string bart_py_err;
@@ -413,18 +392,11 @@ static py::object run(
     long bart_dims_out[BART_DIMS] = {0};
     // memcfl_load increments refcount (0 → 1 after tool's unmap_cfl already
     // brought it to 0).
-    // memcfl_load returns complex float* in C; we capture it as void* to avoid
-    // C99 complex-type usage in C++ code outside an extern "C" block.
     void* ptr = memcfl_load(output_name.c_str(), BART_DIMS, bart_dims_out);
-    fprintf(stderr, "DEBUG run('%s'): output_name='%s', ptr=%p\n",
-            op_name.c_str(), output_name.c_str(), ptr);
     TORCH_CHECK(ptr != nullptr,
                 "bartorch: memcfl_load returned NULL for output '", output_name, "'");
 
     // Find effective ndim: trim trailing size-1 dims.
-    // If output_dims_py is a non-None, non-bool list/tuple, use its length as
-    // minimum ndim so that semantically meaningful trailing 1-dims (e.g. the
-    // maps=1 dimension in ecalib output) are preserved.
     int min_ndim_out = 1;
     if (!py::isinstance<py::bool_>(output_dims_py) && !output_dims_py.is_none()) {
         try {
@@ -441,27 +413,37 @@ static py::object run(
     for (int j = 0; j < ndim_out; ++j)
         shape_out[j] = bart_dims_out[ndim_out - 1 - j];
 
-    // Allocate C-order contiguous output tensor and copy.
-    // (A C-order tensor with reversed shape has the same byte layout as BART's
-    //  Fortran-order buffer — so memcpy is a straight block copy, no reordering.)
-    auto result = torch::empty(shape_out,
-                               torch::TensorOptions().dtype(torch::kComplexFloat));
-    // Debug: check first few floats of the output buffer
-    {
-        float* fp = (float*)ptr;
-        size_t numel = (size_t)result.numel();
-        bool allzero = true;
-        for (size_t k = 0; k < std::min(numel * 2, (size_t)16); ++k)
-            if (fp[k] != 0.f) { allzero = false; break; }
-        fprintf(stderr, "DEBUG memcpy: numel=%zu, first_elem=(%g,%g), allzero=%d\n",
-                numel, fp[0], fp[1], (int)allzero);
-    }
-    std::memcpy(result.data_ptr(), ptr,
-                (size_t)result.numel() * sizeof(c10::complex<float>));
+    // Copy the BART output into a temporary buffer BEFORE calling torch::empty.
+    //
+    // Root cause of the "all-zeros on 2nd call" bug:
+    //   BART and PyTorch share the same malloc pool (libtorch_cpu.so exports
+    //   malloc/free and our extension links against it).  After BART's
+    //   memcfl_unlink frees the output buffer, torch::empty can receive that
+    //   same address from the shared allocator.  The subsequent memcpy would
+    //   be a no-op (src == dst), and then memcfl_unlink would free the block
+    //   that the result tensor still points to — leaving the tensor with freed
+    //   (potentially zeroed by glibc) memory.
+    //
+    //   Fix: stash the raw bytes in a std::vector before releasing BART's
+    //   buffer.  torch::empty is called only after we hold the data safely in
+    //   the vector.  The vector uses its own (stack/heap) storage that the
+    //   BART malloc pool cannot alias.
+    size_t byte_count = 1;
+    for (int j = 0; j < BART_DIMS; ++j) byte_count *= (size_t)bart_dims_out[j];
+    byte_count *= sizeof(c10::complex<float>);
 
-    // Release BART's ownership of the output CFL.
+    std::vector<char> tmp(byte_count);
+    std::memcpy(tmp.data(), ptr, byte_count);
+
+    // Release BART's ownership of the output CFL now that data is in tmp.
     memcfl_unmap(ptr);               // refcount 1 → 0
     memcfl_unlink(output_name.c_str()); // free (managed=true, malloc'd by BART)
+
+    // Allocate output tensor and copy from temporary buffer.
+    auto result = torch::empty(shape_out,
+                               torch::TensorOptions().dtype(torch::kComplexFloat));
+    std::memcpy(result.data_ptr(), tmp.data(),
+                (size_t)result.numel() * sizeof(c10::complex<float>));
 
     return py::cast(result);
 }

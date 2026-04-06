@@ -353,9 +353,8 @@ def ecalib(
     # Passing the expected C-order shape as output_dims ensures that the
     # maps dimension is preserved even when maps=1 (which would otherwise
     # be trimmed as a trailing 1 by run()'s default logic).
-    ndim_in = kspace.ndim          # e.g. 4 for (nc, nz, ny, nx)
     # Spatial dims: last (ndim_in-1) dims of kspace in C-order
-    spatial = list(kspace.shape[1:])   # (nz?, ny, nx)
+    spatial = list(kspace.shape[1:])  # (nz?, ny, nx)
     # Pad spatial to 3 dims (nz, ny, nx) with leading 1s
     while len(spatial) < 3:
         spatial.insert(0, 1)

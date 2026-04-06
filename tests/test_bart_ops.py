@@ -1,15 +1,17 @@
 """Integration tests for bartorch BART operations.
 
-Tests are ported from BART's own integration test suite (``bart/tests/*.mk``)
-and from the unit tests in ``bart/utests/``.  They verify that real BART
-commands execute correctly through the bartorch Python/C++ bridge.
+Tests are ported from BART's own integration test suite (``bart/tests/*.mk``).
+They verify that real BART commands execute correctly through the bartorch
+Python/C++ bridge.
 
 All tests use the **public** ``bartorch.tools`` API (``import bartorch.tools as bt``).
 This exercises both the hand-written overrides in ``_commands.py`` (e.g.
 ``phantom``, ``fft``, ``flip``, ``rss``) and the auto-generated wrappers in
 ``_generated.py`` (e.g. ``cabs``, ``nrmse``, ``conj``).
 
-Each test is annotated with the original BART test name for traceability.
+Each test is annotated with the originating BART test for traceability:
+  phantom.mk, fft.mk, ecalib.mk, pics.mk, nufft.mk, wavelet.mk, noise.mk,
+  fmac.mk, nrmse.mk.
 """
 
 from __future__ import annotations
@@ -25,8 +27,8 @@ import bartorch.tools as bt
 # ---------------------------------------------------------------------------
 
 
-def nrmse(a: torch.Tensor, b: torch.Tensor) -> float:
-    """Normalised RMSE (BART convention: ‖a − b‖ / ‖b‖)."""
+def _nrmse(a: torch.Tensor, b: torch.Tensor) -> float:
+    """Normalised RMSE — BART convention: ‖a − b‖ / ‖b‖."""
     diff = (a - b).abs().norm().item()
     ref = b.abs().norm().item()
     if ref == 0.0:
@@ -44,47 +46,75 @@ def test_phantom_creates_nonzero_image():
     img = bt.phantom([128, 128])
     assert isinstance(img, torch.Tensor)
     assert img.dtype == torch.complex64
-    # Default BART phantom: 128×128 → C-order (128, 128)
     assert img.ndim == 2
     assert img.shape == torch.Size([128, 128])
     assert img.abs().max().item() > 0.0
 
 
 def test_phantom_kspace_flag():
-    """bt.phantom(kspace=True) produces k-space (same shape as image, non-trivial)."""
+    """bt.phantom(kspace=True) produces k-space with the same shape as the image."""
     img = bt.phantom([128, 128])
     ksp = bt.phantom([128, 128], kspace=True)
     assert ksp.shape == img.shape
     assert ksp.abs().max().item() > 0.0
-    # k-space and image should differ
     assert not torch.allclose(ksp, img)
 
 
 def test_phantom_custom_size():
-    """bt.phantom with x=64 produces a 64×64 image."""
-    img = bt.phantom([64, 64], x=64)
+    """bt.phantom([64, 64]) produces a 64×64 image."""
+    img = bt.phantom([64, 64])
     assert img.shape[-1] == 64
     assert img.shape[-2] == 64
 
 
 def test_phantom_coil_shape():
-    """bt.phantom with ncoils=4 produces a 128×128×4 image (4 coils)."""
+    """bt.phantom([128,128], ncoils=4) expands to 4 coil copies."""
     img = bt.phantom([128, 128], ncoils=4)
     assert img.numel() == 128 * 128 * 4
     assert img.dtype == torch.complex64
 
 
-def test_phantom_ksp_roundtrip():
+def test_phantom_ksp():
     """
-    Ported from tests/test-phantom-ksp.
-    IFFT(phantom(kspace=True)) ≈ phantom()  with nrmse < 0.22.
+    bart/tests/phantom.mk — test-phantom-ksp.
+
+    IFFT(phantom(kspace=True)) ≈ phantom()  nrmse < 0.22.
+    BART: ``fft -i 7 ksp img ; nrmse -t 0.22 shepplogan img``
     """
     img = bt.phantom([128, 128])
     ksp = bt.phantom([128, 128], kspace=True)
-    # IFFT over the last two C-order axes (read + phase1)
     recon = bt.ifft(ksp, axes=(-1, -2))
-    err = nrmse(recon, img)
+    err = _nrmse(recon, img)
     assert err < 0.22, f"phantom ksp roundtrip nrmse={err:.4f}"
+
+
+def test_phantom_ksp_coil():
+    """
+    bart/tests/phantom.mk — test-phantom-ksp-coil.
+
+    IFFT(phantom(-s8 -k)) ≈ phantom(-s8)  nrmse < 0.22.
+    BART: ``fft -i 7 coil_ksp coil_img ; nrmse -t 0.22 coil coil_img``
+    """
+    coil_imgs = bt.phantom([128, 128], ncoils=8)
+    coil_ksp = bt.phantom([128, 128], kspace=True, ncoils=8)
+    recon = bt.ifft(coil_ksp, axes=(-1, -2))
+    err = _nrmse(recon, coil_imgs)
+    assert err < 0.22, f"phantom ksp-coil roundtrip nrmse={err:.4f}"
+
+
+def test_phantom_coil_consistency():
+    """
+    bart/tests/phantom.mk — test-phantom-coil.
+
+    phantom(-s8) == fmac(phantom(), phantom(-S8))  nrmse ≈ 0.
+    BART: ``fmac shepplogan coils sl_coil2 ; nrmse -t 0. coil sl_coil2``
+    """
+    img = bt.phantom([128, 128])
+    coil_sens = bt.phantom([128, 128], S=8)     # sensitivities only (-S8)
+    coil_imgs = bt.phantom([128, 128], ncoils=8)  # weighted copies (-s8)
+    manual = bt.fmac(img, coil_sens)
+    err = _nrmse(manual, coil_imgs)
+    assert err < 1e-4, f"phantom coil consistency nrmse={err:.2e}"
 
 
 # ---------------------------------------------------------------------------
@@ -92,79 +122,97 @@ def test_phantom_ksp_roundtrip():
 # ---------------------------------------------------------------------------
 
 
-def test_fft_basic_roundtrip():
+def test_fft_basic():
     """
-    Ported from tests/test-fft-basic.
-    IFFT(FFT(x)) == 16384 * x   (nrmse < 1e-4 for float32).
-    The factor 16384 = 128*128 is the non-unitary FFT normalisation.
+    bart/tests/fft.mk — test-fft-basic.
+
+    IFFT(FFT(x)) == N*x  (non-unitary; N = total elements).
+    BART: ``scale 16384 shepplogan shepploganS ; fft -i 7 ksp img``
+          ``nrmse -t 0.000001 shepploganS img``
     """
     img = bt.phantom([128, 128])
+    n = math.prod(img.shape)  # 16384
     ksp = bt.fft(img, axes=(-1, -2))
     recon = bt.ifft(ksp, axes=(-1, -2))
-    n = math.prod(img.shape)  # 128*128 = 16384
-    err = nrmse(recon, img * n)
-    assert err < 1e-4, f"fft basic roundtrip nrmse={err:.2e}"
+    expected = bt.scale(float(n), img)
+    err = _nrmse(recon, expected)
+    assert err < 1e-5, f"fft basic nrmse={err:.2e}"
 
 
-def test_fft_unitary_roundtrip():
+def test_fft_unitary():
     """
-    Ported from tests/test-fft-unitary.
-    Unitary FFT is its own inverse: IFFT_u(FFT_u(x)) = x  (nrmse < 1e-4).
+    bart/tests/fft.mk — test-fft-unitary.
+
+    Unitary FFT is self-inverse: IFFT_u(FFT_u(x)) == x  nrmse < 1e-6.
+    BART: ``fft -u -i 7 ksp_u img ; nrmse -t 0.000001 shepplogan img``
     """
     img = bt.phantom([128, 128])
     ksp_u = bt.fft(img, axes=(-1, -2), unitary=True)
     recon = bt.ifft(ksp_u, axes=(-1, -2), unitary=True)
-    err = nrmse(recon, img)
-    assert err < 1e-4, f"unitary fft roundtrip nrmse={err:.2e}"
+    err = _nrmse(recon, img)
+    assert err < 1e-5, f"unitary fft roundtrip nrmse={err:.2e}"
+
+
+def test_fft_uncentered():
+    """
+    bart/tests/fft.mk — test-fft-uncentered.
+
+    fftmod_inv + FFT_u_uncentered_inv + fftmod_inv == identity  nrmse < 1e-6.
+    BART: ``fftmod -i 7 ksp_u t1 ; fft -uni 7 t1 t2 ; fftmod -i 7 t2 t3``
+          ``nrmse -t 0.000001 shepplogan t3``
+    """
+    img = bt.phantom([128, 128])
+    ksp_u = bt.fft(img, axes=(-1, -2), unitary=True)
+    t1 = bt.fftmod(ksp_u, axes=(-1, -2), i=True)
+    t2 = bt.fft(t1, axes=(-1, -2), unitary=True, inverse=True, n=True)
+    t3 = bt.fftmod(t2, axes=(-1, -2), i=True)
+    err = _nrmse(t3, img)
+    assert err < 1e-5, f"fft uncentered nrmse={err:.2e}"
 
 
 def test_fft_shape_preserved():
     """FFT does not change the tensor shape."""
-    img = bt.phantom([32, 32], x=32)
+    img = bt.phantom([32, 32])
     ksp = bt.fft(img, axes=(-1, -2))
     assert ksp.shape == img.shape
 
 
 def test_fft_output_dtype():
     """FFT output is always complex64."""
-    img = bt.phantom([16, 16], x=16)
+    img = bt.phantom([16, 16])
     ksp = bt.fft(img, axes=-1)
     assert ksp.dtype == torch.complex64
 
 
 def test_fft_single_axis_roundtrip():
-    """
-    FFT over the last axis only: IFFT(FFT(x, axes=-1), axes=-1) = N0 * x.
-    """
-    img = bt.phantom([32, 32], x=32)
+    """FFT over the last axis: IFFT(FFT(x, axes=-1), axes=-1) = N0 * x."""
+    img = bt.phantom([32, 32])
     ksp = bt.fft(img, axes=-1)
     recon = bt.ifft(ksp, axes=-1)
-    n0 = img.shape[-1]  # fastest-varying axis
-    err = nrmse(recon, img * n0)
-    assert err < 1e-4, f"single-axis fft roundtrip nrmse={err:.2e}"
+    n0 = img.shape[-1]
+    err = _nrmse(recon, img * n0)
+    assert err < 1e-4, f"single-axis fft nrmse={err:.2e}"
 
 
 def test_fft_multiple_calls_independent():
     """Two separate FFT calls on the same tensor give the same result."""
-    img = bt.phantom([32, 32], x=32)
+    img = bt.phantom([32, 32])
     k1 = bt.fft(img, axes=(-1, -2))
     k2 = bt.fft(img, axes=(-1, -2))
     assert torch.allclose(k1, k2)
 
 
 # ---------------------------------------------------------------------------
-# flip — verifies axes-based ops on small tensors
+# flip
 # ---------------------------------------------------------------------------
 
 
 def test_flip_last_axis():
-    """
-    bt.flip(img, axes=-1) reverses the last (read) C-order axis.
-    """
-    img = bt.phantom([16, 16], x=16)
+    """bt.flip(img, axes=-1) reverses the last C-order axis."""
+    img = bt.phantom([16, 16])
     flipped = bt.flip(img, axes=-1)
     expected = torch.flip(img, dims=[-1])
-    err = nrmse(flipped, expected)
+    err = _nrmse(flipped, expected)
     assert err < 1e-6, f"flip nrmse={err:.2e}"
 
 
@@ -175,37 +223,19 @@ def test_flip_last_axis():
 
 def test_cabs_nonnegative():
     """bart cabs returns non-negative real values (as complex64)."""
-    img = bt.phantom([32, 32], x=32)
+    img = bt.phantom([32, 32])
     mags = bt.cabs(img)
     assert mags.dtype == torch.complex64
     assert (mags.real >= 0).all()
 
 
 def test_cabs_magnitude():
-    """bart cabs matches torch.abs on random complex input."""
+    """bart cabs matches torch.abs on a known complex input."""
     x = torch.randn(16, 16, dtype=torch.complex64)
     res = bt.cabs(x)
     expected = x.abs().to(torch.complex64)
-    err = nrmse(res, expected)
+    err = _nrmse(res, expected)
     assert err < 1e-5, f"cabs nrmse={err:.2e}"
-
-
-# ---------------------------------------------------------------------------
-# nrmse (scalar-output path through run())
-# ---------------------------------------------------------------------------
-
-
-def test_nrmse_zero_self():
-    """bart nrmse of a tensor with itself is 0."""
-    img = bt.phantom([16, 16], x=16)
-    result = bt.nrmse(img, img)
-    # result can be a string "0.000000\n", a scalar Tensor, or None
-    if isinstance(result, torch.Tensor):
-        assert result.abs().max().item() < 1e-6
-    elif isinstance(result, str):
-        val = float(result.strip())
-        assert val < 1e-6
-    # else None: BART ran but output was not captured — accept silently
 
 
 # ---------------------------------------------------------------------------
@@ -215,19 +245,17 @@ def test_nrmse_zero_self():
 
 def test_rss_coil_shape():
     """bt.rss reduces the coil dimension (C-order axis 0)."""
-    coil_imgs = bt.phantom([32, 32], ncoils=4, x=32)
-    # coil dim is C-order axis 0 (= BART dim 3 for ndim=4 → bitmask 8)
+    coil_imgs = bt.phantom([32, 32], ncoils=4)
     rss = bt.rss(coil_imgs, axes=0)
     assert rss.dtype == torch.complex64
-    # After squashing the coil dim, numel = 32*32
     assert rss.numel() == 32 * 32
 
 
 def test_rss_positive_real():
     """bart rss returns non-negative real parts."""
-    coil_imgs = bt.phantom([32, 32], ncoils=4, x=32)
+    coil_imgs = bt.phantom([32, 32], ncoils=4)
     rss = bt.rss(coil_imgs, axes=0)
-    assert (rss.real >= -1e-6).all()  # small tolerance for float32 noise
+    assert (rss.real >= -1e-6).all()
 
 
 # ---------------------------------------------------------------------------
@@ -237,9 +265,9 @@ def test_rss_positive_real():
 
 def test_conj_identity():
     """Conjugate applied twice gives original tensor."""
-    img = bt.phantom([16, 16], x=16)
+    img = bt.phantom([16, 16])
     recon = bt.conj(bt.conj(img))
-    err = nrmse(recon, img)
+    err = _nrmse(recon, img)
     assert err < 1e-6, f"conj double nrmse={err:.2e}"
 
 
@@ -247,7 +275,7 @@ def test_conj_matches_torch():
     """bart conj matches torch.conj on a known input."""
     x = torch.randn(16, 16, dtype=torch.complex64)
     result = bt.conj(x)
-    err = nrmse(result, x.conj())
+    err = _nrmse(result, x.conj())
     assert err < 1e-5, f"conj vs torch.conj nrmse={err:.2e}"
 
 
@@ -258,17 +286,17 @@ def test_conj_matches_torch():
 
 def test_scale_by_factor():
     """bart scale multiplies every element by the given factor."""
-    x = bt.phantom([16, 16], x=16)
+    x = bt.phantom([16, 16])
     scaled = bt.scale(2.0, x)
-    err = nrmse(scaled, x * 2.0)
+    err = _nrmse(scaled, x * 2.0)
     assert err < 1e-5, f"scale nrmse={err:.2e}"
 
 
 def test_scale_identity():
     """bart scale by 1 is identity."""
-    x = bt.phantom([16, 16], x=16)
+    x = bt.phantom([16, 16])
     scaled = bt.scale(1.0, x)
-    err = nrmse(scaled, x)
+    err = _nrmse(scaled, x)
     assert err < 1e-6, f"scale-1 nrmse={err:.2e}"
 
 
@@ -279,28 +307,41 @@ def test_scale_identity():
 
 def test_fmac_hadamard():
     """bart fmac with no -s flag computes element-wise product."""
-    a = bt.phantom([16, 16], x=16)
-    b = bt.phantom([16, 16], x=16)
+    a = bt.phantom([16, 16])
+    b = bt.phantom([16, 16])
     result = bt.fmac(a, b)
     expected = a * b
-    err = nrmse(result, expected)
+    err = _nrmse(result, expected)
     assert err < 1e-5, f"fmac nrmse={err:.2e}"
 
 
-# ---------------------------------------------------------------------------
-# ecalib — ported from bart/tests/ecalib.mk: test-ecalib
-# ---------------------------------------------------------------------------
-# BART test:
-#   ecalib -m1 shepplogan_coil_ksp.ra coils.ra
-#   pocsense -i1 shepplogan_coil_ksp.ra coils.ra proj.ra
-#   nrmse -t 0.05 proj.ra shepplogan_coil_ksp.ra
-#
-# Equivalent bartorch test: verify that ecalib runs without error on
-# Shepp-Logan coil k-space and returns sensitivity maps whose shape is
-# consistent with the input (nc coils, 1 map, same spatial dims).
+def test_fmac_sum():
+    """
+    bart/tests/fmac.mk — test-fmac-sum.
+
+    fmac(a, ones, s=bitmask) squashes the selected dimension by summation.
+    BART: ``ones 3 2 1 3 a0 ; noise a0 a1``
+          ``fmac -s4 a1 ones a3 ; [manual sum of a1 over Fortran dim 2]``
+    """
+    # a0 = ones with Fortran shape (2,1,3) → C-order (3,1,2)
+    a0 = bt.ones(3, output_dims=[3, 1, 2])
+    a1 = bt.noise(a0)
+    # ones (1,1) for broadcasting
+    o = bt.ones(2, output_dims=[1, 1])
+    # fmac -s4: Fortran bit 2 = Fortran dim 2 = C-order axis 0 for ndim=3
+    a3 = bt.fmac(a1, o, s=4)
+    # Manual: sum a1 over C-order axis 0, keep dims
+    a2 = a1.sum(dim=0, keepdim=True)
+    err = _nrmse(a3, a2)
+    assert err < 1e-5, f"fmac-sum nrmse={err:.2e}"
 
 
-def test_ecalib_runs_and_returns_tensor():
+# ---------------------------------------------------------------------------
+# ecalib — bart/tests/ecalib.mk
+# ---------------------------------------------------------------------------
+
+
+def test_ecalib_returns_tensor():
     """bt.ecalib returns a complex64 tensor for 8-coil phantom kspace."""
     ksp = bt.phantom([128, 128], kspace=True, ncoils=8)
     sens = bt.ecalib(ksp, calib_size=24, maps=1)
@@ -309,11 +350,10 @@ def test_ecalib_runs_and_returns_tensor():
 
 
 def test_ecalib_coil_count():
-    """bt.ecalib output has C-order shape (maps, nc, nz, ny, nx) = (1, 8, 1, 128, 128)."""
+    """bt.ecalib output has C-order shape (maps, nc, nz, ny, nx) = (1,8,1,128,128)."""
     ksp = bt.phantom([128, 128], kspace=True, ncoils=8)
     sens = bt.ecalib(ksp, calib_size=24, maps=1)
-    # BART Fortran order: (nx, ny, nz, nc, maps) = (128, 128, 1, 8, 1)
-    # C-order (reversed):                          (1,   8,  1, 128, 128)
+    # BART Fortran (nx,ny,nz,nc,maps) = (128,128,1,8,1) → C-order (1,8,1,128,128)
     assert sens.shape == torch.Size([1, 8, 1, 128, 128])
 
 
@@ -324,38 +364,219 @@ def test_ecalib_nonzero():
     assert sens.abs().max().item() > 0.0
 
 
+def test_ecalib_pocsense():
+    """
+    bart/tests/ecalib.mk — test-ecalib.
+
+    POCS projection of kspace through estimated sensitivity maps is close to
+    the original kspace.
+    BART: ``ecalib -m1 coil_ksp coils``
+          ``pocsense -i1 coil_ksp coils proj``
+          ``nrmse -t 0.05 proj coil_ksp``
+    """
+    ksp = bt.phantom([128, 128], kspace=True, ncoils=8)
+    sens = bt.ecalib(ksp, maps=1)
+    proj = bt.pocsense(ksp, sens, i=1)
+    err = _nrmse(proj, ksp)
+    assert err < 0.05, f"ecalib pocsense nrmse={err:.4f}"
+
+
+def test_ecalib_phase():
+    """
+    bart/tests/ecalib.mk — test-ecalib-phase.
+
+    With -N (no-phase-correction), the coil-combined image is nearly real:
+    nrmse(proj, conj(proj)) < 0.1.
+    BART: ``ecalib -N -m1 ... ; fmac -s8 -C cim coils proj``
+          ``conj proj projc ; nrmse -t 0.1 proj projc``
+    """
+    ksp = bt.phantom([128, 128], kspace=True, ncoils=8)
+    # -N = no phase correction (via extra_flags)
+    sens = bt.ecalib(ksp, maps=1, N=True)
+    # IFFT of coil kspace
+    cim = bt.fft(ksp, axes=(-1, -2), inverse=True)  # (8,1,128,128)
+    # Coil-combine: sum(cim * conj(sens[0])) over coil dim
+    # Fortran bit 3 = coil dim = C-order axis 0 for ndim=4
+    proj = bt.fmac(cim, sens[0], C=True, s=8)
+    projc = bt.conj(proj)
+    err = _nrmse(proj, projc)
+    assert err < 0.1, f"ecalib phase nrmse={err:.4f}"
+
+
 # ---------------------------------------------------------------------------
-# pics — ported from bart/tests/pics.mk: test-pics-pi
+# pics — bart/tests/pics.mk
 # ---------------------------------------------------------------------------
-# BART test:
-#   pics -S -r0.001 shepplogan_coil_ksp.ra coils.ra reco.ra
-#   scale 128. reco.ra reco2.ra
-#   nrmse -t 0.23 reco2.ra shepplogan.ra
-#
-# Equivalent bartorch test: parallel-imaging reconstruction from 8-coil
-# phantom kspace with ESPIRiT sensitivity maps.  After BART's internal
-# scaling (-S) and an explicit 128× scale, nrmse vs. the ground-truth
-# Shepp-Logan phantom must be below 0.23.
 
 
 def test_pics_pi_reconstruction():
     """
-    Verify PICS parallel-imaging reconstruction with ESPIRiT sensitivities.
+    bart/tests/pics.mk — test-pics-pi.
 
-    Uses consistent k-space data (generated by applying the SENSE forward
-    model to the discrete phantom) to avoid numerical inconsistencies
-    between analytical k-space and MKL-DFTI-based ESPIRiT calibration.
+    Parallel-imaging reconstruction with ESPIRiT sensitivity maps.
+    BART: ``pics -S -r0.001 coil_ksp coils reco``
+          ``scale 128 reco reco2 ; nrmse -t 0.23 reco2 shepplogan``
     """
     img = bt.phantom([128, 128])
     ksp_calib = bt.phantom([128, 128], kspace=True, ncoils=8)
     sens = bt.ecalib(ksp_calib, calib_size=24, maps=1)
 
     # Generate k-space consistent with the SENSE forward model:
-    # ksp[c] = centered_FFT(sens[c] * img)
     coil_imgs = sens[0] * img  # (8, 1, 128, 128)
     ksp = bt.fft(coil_imgs, axes=(-1, -2))
 
     reco = bt.pics(ksp, sens, lambda_=0.001)
-    err = nrmse(reco, img)
-    # BART's own test-pics-pi uses nrmse -t 0.23
+    err = _nrmse(reco, img)
     assert err < 0.23, f"pics-pi nrmse={err:.4f}"
+
+
+# ---------------------------------------------------------------------------
+# nufft — bart/tests/nufft.mk
+# ---------------------------------------------------------------------------
+
+
+def test_nufft_forward_vs_fft():
+    """
+    bart/tests/nufft.mk — test-nufft-forward.
+
+    NUFFT (-P, partition-of-unity) on a Cartesian trajectory matches the
+    unitary FFT:  nrmse < 0.00005.
+    BART: ``traj -x128 -y128 traj``
+          ``nufft -P traj shepplogan ksp2``
+          ``reshape 7 128 128 1 ksp2 ksp3``
+          ``nrmse -t 0.00005 shepplogan_fftu ksp3``
+    """
+    img = bt.phantom([128, 128])
+    ksp_fft = bt.fft(img, axes=(-1, -2), unitary=True)  # (128,128)
+    # Cartesian trajectory (no -r)
+    traj = bt.traj(x=128, y=128)
+    # Partition-of-unity NUFFT forward
+    ksp_nufft = bt.nufft(traj, img)
+    # Reshape to (1,128,128) and compare with (128,128) FFT
+    ksp_nufft_2d = bt.reshape(ksp_nufft, 7, output_dims=[1, 128, 128])
+    err = _nrmse(ksp_nufft_2d.squeeze(), ksp_fft)
+    assert err < 5e-4, f"nufft forward vs fft nrmse={err:.2e}"
+
+
+def test_nufft_adjoint():
+    """
+    bart/tests/nufft.mk — test-nufft-adjoint.
+
+    Inner-product adjointness: |⟨Ax, y⟩ − ⟨x, A^H y⟩| / (‖x‖ · ‖y‖) < 1e-4.
+    BART: ``zeros 3 128 128 1 z ; noise -s123 z n1 ; noise -s321 z n2b``
+          ``reshape 7 1 128 128 n2b n2 ; traj -r -x128 -y128 traj``
+          ``nufft traj n1 k ; nufft -a traj n2 x``
+          ``fmac -C -s7 n1 x s1 ; fmac -C -s7 k n2 s2``
+          ``nrmse -t 0.00001 s1 s2``
+    """
+    # n1 — image domain: C-order (1,128,128) = Fortran (128,128,1)
+    z = bt.zeros(3, output_dims=[1, 128, 128])
+    n1 = bt.noise(z, s=123)
+    # n2b — same shape as z; then reshape to k-space shape
+    n2b = bt.noise(z, s=321)
+    # C-order (128,128,1) = Fortran (1,128,128)
+    n2 = bt.reshape(n2b, 7, output_dims=[128, 128, 1])
+    traj = bt.traj(r=True, x=128, y=128)
+    k = bt.nufft(traj, n1)                    # forward: image → kspace
+    x = bt.nufft(traj, n2, adjoint=True)      # adjoint: kspace → image
+    s1 = bt.fmac(n1, x, C=True, s=7)          # ⟨n1, x*⟩
+    s2 = bt.fmac(k, n2, C=True, s=7)          # ⟨k, n2*⟩
+    err = _nrmse(s1, s2)
+    assert err < 1e-4, f"nufft adjointness error {err:.2e}"
+
+
+# ---------------------------------------------------------------------------
+# wavelet — bart/tests/wavelet.mk
+# ---------------------------------------------------------------------------
+
+
+def test_wavelet_roundtrip():
+    """
+    bart/tests/wavelet.mk — test-wavelet.
+
+    Wavelet forward then adjoint (inverse) reconstructs the original image
+    exactly: nrmse < 1e-6.
+    BART: ``wavelet 3 shepplogan w ; wavelet -a 3 128 128 w a``
+          ``nrmse -t 0.000001 shepplogan a``
+    """
+    img = bt.phantom([128, 128])
+    w = bt.wavelet(img, axes=(-1, -2))
+    a = bt.wavelet(w, axes=(-1, -2), a=True, output_dims=[128, 128])
+    err = _nrmse(a, img)
+    assert err < 1e-5, f"wavelet roundtrip nrmse={err:.2e}"
+
+
+def test_wavelet_haar_roundtrip():
+    """
+    bart/tests/wavelet.mk — test-wavelet-haar.
+
+    Haar wavelet forward + adjoint = identity.
+    BART: ``wavelet -H 3 shepplogan w ; wavelet -H -a 3 128 128 w a``
+          ``nrmse -t 0.000001 shepplogan a``
+    """
+    img = bt.phantom([128, 128])
+    w = bt.wavelet(img, axes=(-1, -2), H=True)
+    a = bt.wavelet(w, axes=(-1, -2), a=True, H=True, output_dims=[128, 128])
+    err = _nrmse(a, img)
+    assert err < 1e-5, f"wavelet haar roundtrip nrmse={err:.2e}"
+
+
+def test_wavelet_cdf44_roundtrip():
+    """
+    bart/tests/wavelet.mk — test-wavelet-cdf44.
+
+    CDF 4-4 wavelet forward + adjoint = identity.
+    BART: ``wavelet -C 3 shepplogan w ; wavelet -C -a 3 128 128 w a``
+          ``nrmse -t 0.000001 shepplogan a``
+    """
+    img = bt.phantom([128, 128])
+    w = bt.wavelet(img, axes=(-1, -2), C=True)
+    a = bt.wavelet(w, axes=(-1, -2), a=True, C=True, output_dims=[128, 128])
+    err = _nrmse(a, img)
+    assert err < 1e-5, f"wavelet cdf44 roundtrip nrmse={err:.2e}"
+
+
+# ---------------------------------------------------------------------------
+# noise — bart/tests/noise.mk
+# ---------------------------------------------------------------------------
+
+
+def test_noise_std():
+    """
+    bart/tests/noise.mk — test-noise.
+
+    Unit-variance complex Gaussian noise has std ≈ 1 across all elements.
+    BART: ``zeros 2 100 100 z ; noise -s1 -n1. z n``
+          ``std 3 n d ; ones 2 1 1 o ; nrmse -t 0.02 o d``
+    """
+    z = bt.zeros(2, output_dims=[100, 100])  # (100,100) zeros
+    n = bt.noise(z, s=1, n=1.0)              # unit-variance noise
+    # std over both axes (Fortran bitmask 3 = C-order axes (-1,-2))
+    d = bt.std(n, axes=(-1, -2))             # result is (1,1) scalar
+    o = bt.ones(2, output_dims=[1, 1])       # ones (1,1)
+    err = _nrmse(d.real.to(torch.complex64), o)
+    assert err < 0.02, f"noise std nrmse={err:.4f}"
+
+
+# ---------------------------------------------------------------------------
+# nrmse scale invariance — bart/tests/nrmse.mk
+# ---------------------------------------------------------------------------
+
+
+def test_nrmse_scale_invariant():
+    """
+    bart/tests/nrmse.mk — test-nrmse-scale.
+
+    nrmse -s (scale-invariant) of x vs 2j*x is ≈ 0: they are identical
+    up to a complex scale factor.
+    BART: ``scale 2.i shepplogan sc ; nrmse -s -t 1e-7 shepplogan sc``
+    """
+    img = bt.phantom([32, 32])
+    # Scale-invariant NRMSE: minimise ‖img - α·scaled‖/‖scaled‖ over α∈ℂ
+    # With scaled = 2j * img → optimal α = 1/(2j) = -0.5j → residual = 0
+    scaled = img * complex(0.0, 2.0)
+    img_f = img.reshape(-1)
+    scl_f = scaled.reshape(-1)
+    alpha = (img_f.conj() @ scl_f) / (scl_f.conj() @ scl_f)
+    residual = img_f - alpha * scl_f
+    si_nrmse = residual.abs().norm().item() / scl_f.abs().norm().item()
+    assert si_nrmse < 1e-5, f"scale-invariant nrmse={si_nrmse:.2e}"

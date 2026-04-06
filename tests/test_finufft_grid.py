@@ -28,7 +28,7 @@ def _bart_available() -> bool:
     try:
         import bartorch.tools as bt
 
-        bt.phantom(x=8)
+        bt.phantom([8, 8])
         return True
     except Exception:
         return False
@@ -112,7 +112,7 @@ def test_es_rolloff_monotone():
 def test_adjointness_2d():
     """Adjointness of NUFFT forward/adjoint for a 2-D radial trajectory.
 
-    Checks:  |⟨A x, y⟩ − ⟨x, A^H y⟩| / (‖x‖ · ‖y‖) < tol
+    Checks:  |⟨A x, y⟩ − ⟨x, A^H y⟩| / ‖s2‖ < tol
     """
     import torch
 
@@ -128,7 +128,9 @@ def test_adjointness_2d():
 
     s1 = bt.fmac(n1, x, C=True, s=7)
     s2 = bt.fmac(k, n2, C=True, s=7)
-    err = float(bt.nrmse(s1, s2))
+    diff = (s1 - s2).abs().norm().item()
+    ref = s2.abs().norm().item()
+    err = diff / ref if ref != 0.0 else diff
     assert err < 1e-4, f"Adjointness error {err:.2e} exceeds 1e-4"
 
 
@@ -149,5 +151,7 @@ def test_adjointness_3d():
 
     s1 = bt.fmac(n1, x, C=True, s=7)
     s2 = bt.fmac(k, n2, C=True, s=7)
-    err = float(bt.nrmse(s1, s2))
+    diff = (s1 - s2).abs().norm().item()
+    ref = s2.abs().norm().item()
+    err = diff / ref if ref != 0.0 else diff
     assert err < 1e-4, f"Adjointness error {err:.2e} exceeds 1e-4"

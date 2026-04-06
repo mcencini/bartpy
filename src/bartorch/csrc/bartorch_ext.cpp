@@ -29,6 +29,10 @@
 #include <pybind11/pybind11.h>
 #include <pybind11/stl.h>
 
+// Python.h needed for PyErr_Occurred/Fetch/Clear used in run() to drain
+// any exception BART's BART_WITH_PYTHON error handler may have set.
+#include <Python.h>
+
 #include <algorithm>
 #include <atomic>
 #include <cstring>
@@ -206,8 +210,9 @@ static std::vector<std::string> build_argv(
     // 3. Input CFL names -------------------------------------------------
     for (const auto& n : input_names) parts.push_back(n);
 
-    // 4. Output CFL name -------------------------------------------------
-    parts.push_back(output_name);
+    // 4. Output CFL name (omitted for scalar-output tools) ---------------
+    if (!output_name.empty())
+        parts.push_back(output_name);
 
     return parts;
 }
@@ -283,8 +288,17 @@ static py::object run(
                         t.data_ptr(), /*managed=*/0);
     }
 
-    const std::string output_name =
-        "_bt_" + std::to_string(call_id) + "_out0.mem";
+    // When output_dims_py is exactly Python False the tool produces a scalar
+    // (or no) output and does NOT expect a CFL output file argument.
+    // For all other values (None, a list, an int) the tool writes a CFL.
+    bool want_cfl_output = !(
+        py::isinstance<py::bool_>(output_dims_py) &&
+        !output_dims_py.cast<bool>()
+    );
+
+    const std::string output_name = want_cfl_output
+        ? "_bt_" + std::to_string(call_id) + "_out0.mem"
+        : "";
 
     // ── 2. Build argv and call BART ────────────────────────────────────────
     auto parts = build_argv(op_name, input_names, output_name,
@@ -297,10 +311,31 @@ static py::object run(
     int argc = (int)parts.size();
 
     char err_buf[512] = {'\0'};
+    // Clear any pending Python exception before calling bart_command.
+    // With BART_WITH_PYTHON, BART's error() calls PyErr_SetString, which sets
+    // a Python exception indicator.  pybind11 checks PyErr_Occurred() on
+    // return from every bound function; a stale pending exception causes it to
+    // re-raise instead of returning normally.  Clearing here ensures a clean
+    // state before the BART call.
+    if (PyErr_Occurred()) PyErr_Clear();
     int  ret          = bart_command(sizeof(err_buf), err_buf, argc, argv.data());
+    // Capture the BART-set Python exception (if any) and clear it before
+    // pybind11 sees it.  We propagate BART errors via ret != 0 / RuntimeError.
+    std::string bart_py_err;
+    if (PyErr_Occurred()) {
+        PyObject *ptype = nullptr, *pvalue = nullptr, *ptb = nullptr;
+        PyErr_Fetch(&ptype, &pvalue, &ptb);
+        PyErr_NormalizeException(&ptype, &pvalue, &ptb);
+        if (pvalue) {
+            PyObject* str = PyObject_Str(pvalue);
+            if (str) { bart_py_err = PyUnicode_AsUTF8(str); Py_DECREF(str); }
+        }
+        Py_XDECREF(ptype); Py_XDECREF(pvalue); Py_XDECREF(ptb);
+    }
 
     debug_level = saved_debug;
 
+    // ── 3. Clean up input registrations ───────────────────────────────────
     // ── 3. Clean up input registrations ───────────────────────────────────
     // After a successful bart_command() call:
     //   - Each input was loaded by the tool (refcount: 1 → 2) then unmapped
@@ -328,13 +363,14 @@ static py::object run(
         std::string msg = "BART '" + op_name + "' failed (code " +
                           std::to_string(ret) + ")";
         if (err_buf[0]) msg += ": " + std::string(err_buf);
+        else if (!bart_py_err.empty()) msg += ": " + bart_py_err;
         throw std::runtime_error(msg);
     }
 
     // ── 5. Retrieve scalar text output (nrmse, bitmask, …) ────────────────
-    // These commands write a number/string to err_buf and do NOT create an
-    // output CFL file.
-    if (!memcfl_exists(output_name.c_str())) {
+    // For scalar-output tools (!want_cfl_output) we never registered an output
+    // CFL, so skip the memcfl_exists check entirely.
+    if (!want_cfl_output || !memcfl_exists(output_name.c_str())) {
         if (err_buf[0]) return py::str(std::string(err_buf));
         return py::none();
     }

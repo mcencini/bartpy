@@ -40,6 +40,12 @@ See ``agents.md`` for the full design and implementation roadmap.
 
 from importlib.metadata import PackageNotFoundError, version
 
+# torch must be imported before _bartorch_ext is loaded so that
+# THPVariableClass (PyTorch's Python tensor type) is initialised.
+# Without this, py::cast<torch::Tensor> in the C++ extension segfaults
+# because the Python type object pointer is NULL.
+import torch  # noqa: F401  (side-effect import)
+
 try:
     __version__ = version("bartorch")
 except PackageNotFoundError:

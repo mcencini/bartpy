@@ -267,6 +267,7 @@ def _parse_tool_source(tool_name: str, src_path: Path) -> dict:
     * ``value_args``    — list of ``(py_type, name, description)`` for non-CFL
                           positional args (ARG_ULONG, ARG_INT, …)
     * ``opts``          — list of ``(py_type, py_key, orig_key, argname, descr)``
+    * ``has_cfl_output``— True if the tool writes a CFL output file (ARG_OUTFILE)
     """
     content = src_path.read_text(errors="replace")
     code = _strip_c_comments(content)
@@ -306,14 +307,17 @@ def _parse_tool_source(tool_name: str, src_path: Path) -> dict:
     )
     tensor_inputs: list[tuple[str]] = []
     value_args: list[tuple[str, str, str]] = []
+    has_cfl_output: bool = False
     if args_m:
         for m in re.finditer(
             r"ARG_(\w+)\s*\(\s*(?:true|false)\s*,\s*[^,]+,\s*\"([^\"]+)\"",
             args_m.group(1),
         ):
             kind, argname = m.group(1), m.group(2)
-            if kind in _TENSOR_ARG_TYPES and kind != "OUTFILE":
+            if kind == "OUTFILE":
                 # ARG_OUTFILE drives output allocation; it is not a Python input arg
+                has_cfl_output = True
+            elif kind in _TENSOR_ARG_TYPES:
                 tensor_inputs.append((argname,))
             elif kind in _VALUE_ARG_TYPE_MAP:
                 py_type = _VALUE_ARG_TYPE_MAP[kind]
@@ -394,6 +398,7 @@ def _parse_tool_source(tool_name: str, src_path: Path) -> dict:
         "tensor_inputs": tensor_inputs,
         "value_args": value_args,
         "opts": opts,
+        "has_cfl_output": has_cfl_output,
     }
 
 
@@ -537,14 +542,17 @@ def _generate_func(info: dict) -> str:
 
     kw_str = ", ".join(kw_parts)
     pos_arg = f"_pos={pos_expr}, " if value_args else ""
+    # For scalar-output tools (no ARG_OUTFILE), pass False as the output_dims
+    # sentinel so that run() knows not to append a CFL output filename to argv.
+    output_dims_val = "output_dims" if info.get("has_cfl_output", True) else "False"
     if kw_str:
         body = (
-            f"    return dispatch({name!r}, {inputs_expr}, output_dims,\n"
+            f"    return dispatch({name!r}, {inputs_expr}, {output_dims_val},\n"
             f"                    {pos_arg}{kw_str}, **extra_flags)"
         )
     else:
         body = (
-            f"    return dispatch({name!r}, {inputs_expr}, output_dims,\n"
+            f"    return dispatch({name!r}, {inputs_expr}, {output_dims_val},\n"
             f"                    {pos_arg}**extra_flags)"
         )
 

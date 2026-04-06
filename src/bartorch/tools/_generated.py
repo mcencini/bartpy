@@ -445,7 +445,7 @@ def bitmask(
     torch.Tensor
         Result array in C-order ``complex64``.
     """
-    return dispatch('bitmask', [], output_dims,
+    return dispatch('bitmask', [], False,
                     b=b or None, **extra_flags)
 
 @bart_op
@@ -1126,7 +1126,7 @@ def copy(
     torch.Tensor
         Result array in C-order ``complex64``.
     """
-    return dispatch('copy', [input_, output], output_dims,
+    return dispatch('copy', [input_, output], False,
                     **extra_flags)
 
 @bart_op
@@ -1784,7 +1784,7 @@ def estdims(
     torch.Tensor
         Result array in C-order ``complex64``.
     """
-    return dispatch('estdims', [traj], output_dims,
+    return dispatch('estdims', [traj], False,
                     **extra_flags)
 
 @bart_op
@@ -1977,7 +1977,7 @@ def estvar(
     torch.Tensor
         Result array in C-order ``complex64``.
     """
-    return dispatch('estvar', [kspace], output_dims,
+    return dispatch('estvar', [kspace], False,
                     k=k, K=K, r=r, R=R, **extra_flags)
 
 @bart_op
@@ -3021,7 +3021,7 @@ def join(
     torch.Tensor
         Result array in C-order ``complex64``.
     """
-    return dispatch('join', [output], output_dims,
+    return dispatch('join', [output], False,
                     _pos=[dimension], a=a or None, s=s or None, **extra_flags)
 
 @bart_op
@@ -3327,7 +3327,7 @@ def mnist(
     torch.Tensor
         Result array in C-order ``complex64``.
     """
-    return dispatch('mnist', [input_, weights, ref_per_output], output_dims,
+    return dispatch('mnist', [input_, weights, ref_per_output], False,
                     a=a or None, t=t or None, g=g or None, **extra_flags)
 
 @bart_op
@@ -3709,7 +3709,7 @@ def multicfl(
     torch.Tensor
         Result array in C-order ``complex64``.
     """
-    return dispatch('multicfl', [], output_dims,
+    return dispatch('multicfl', [], False,
                     s=s or None, **extra_flags)
 
 @bart_op
@@ -4271,7 +4271,7 @@ def nnet(
     torch.Tensor
         Result array in C-order ``complex64``.
     """
-    return dispatch('nnet', [input_, weights, ref_per_output], output_dims,
+    return dispatch('nnet', [input_, weights, ref_per_output], False,
                     a=a or None, e=e or None, t=t or None, g=g or None, load_memory=load_memory or None, b=b, l=l, export_graph=export_graph, **extra_flags)
 
 @bart_op
@@ -4408,7 +4408,7 @@ def nrmse(
     torch.Tensor
         Result array in C-order ``complex64``.
     """
-    return dispatch('nrmse', [reference, input_], output_dims,
+    return dispatch('nrmse', [reference, input_], False,
                     s=s or None, t=t, S=S or None, **extra_flags)
 
 @bart_op
@@ -5522,7 +5522,7 @@ def reconet(
     torch.Tensor
         Result array in C-order ``complex64``.
     """
-    return dispatch('reconet', [kspace, sensitivities, weights, ref_per_out], output_dims,
+    return dispatch('reconet', [kspace, sensitivities, weights, ref_per_out], False,
                     B=B, t=t or None, e=e or None, a=a or None, g=g or None, n=n or None, rss_norm=rss_norm or None, export=export or None, load_memory=load_memory or None, lowmem=lowmem or None, test=test or None, ksp_training=ksp_training or None, no_precomp=no_precomp or None, l=l, b=b, I=I, trajectory=trajectory, pattern=pattern, adjoint=adjoint, psf=psf, mask=mask, export_graph=export_graph, **extra_flags)
 
 @bart_op
@@ -6178,7 +6178,7 @@ def sdot(
     torch.Tensor
         Result array in C-order ``complex64``.
     """
-    return dispatch('sdot', [input1, input2], output_dims,
+    return dispatch('sdot', [input1, input2], False,
                     **extra_flags)
 
 @bart_op
@@ -6371,7 +6371,7 @@ def show(
     torch.Tensor
         Result array in C-order ``complex64``.
     """
-    return dispatch('show', [input_], output_dims,
+    return dispatch('show', [input_], False,
                     m=m or None, R=R or None, N=N or None, d=d, s=s, f=f, **extra_flags)
 
 @bart_op
@@ -6953,7 +6953,7 @@ def tee(
     torch.Tensor
         Result array in C-order ``complex64``.
     """
-    return dispatch('tee', [], output_dims,
+    return dispatch('tee', [], False,
                     **extra_flags)
 
 @bart_op
@@ -6996,7 +6996,7 @@ def tensorflow(
     torch.Tensor
         Result array in C-order ``complex64``.
     """
-    return dispatch('tensorflow', [], output_dims,
+    return dispatch('tensorflow', [], False,
                     _pos=[TensorFlow_Graph], n=n or None, g=g or None, b=b, **extra_flags)
 
 @bart_op
@@ -7185,7 +7185,7 @@ def toraw(
     torch.Tensor
         Result array in C-order ``complex64``.
     """
-    return dispatch('toraw', [input_], output_dims,
+    return dispatch('toraw', [input_], False,
                     n=n or None, c=c or None, b=b, **extra_flags)
 
 @bart_op

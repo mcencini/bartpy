@@ -215,49 +215,27 @@ foreach(_root ${_py_roots})
     endif()
 endforeach()
 
-# ── MKL found — use it for CBLAS ─────────────────────────────────────────────
+# ── MKL found — use it for CBLAS + FFTW3 (via mkl_fftw_shim) ────────────────
 if(_mkl_include_dir AND _mkl_rt_lib)
     set(CBLAS_INCLUDE_DIR  "${_mkl_include_dir}")
     set(CBLAS_LIBRARY      "${_mkl_rt_lib}")
+    # MKL ships a drop-in FFTW3 compatibility layer; headers live in fftw/.
+    # The actual fftwf_plan_guru64_dft symbol is provided at runtime by MKL's
+    # FFTW3 compat layer, but we intercept it with our mkl_fftw_shim.c (see
+    # below) so that BART's multi-dimensional FFTs work correctly.
+    set(FFTW3F_INCLUDE_DIR "${_mkl_include_dir}/fftw")
+    set(FFTW3F_LIBRARY     "${_mkl_rt_lib}")
     list(APPEND BART_DEFS USE_MKL)
-    message(STATUS "BLAS: MKL")
+    message(STATUS "BLAS+FFT: MKL (fftwf shim via MKL DFTI)")
     message(STATUS "  headers : ${_mkl_include_dir}")
     message(STATUS "  runtime : ${_mkl_rt_lib}")
-
-    # For FFTW3 (used by BART's FFT and FINUFFT), prefer the real libfftw3f over
-    # MKL's FFTW3 compatibility wrapper.  MKL's wrapper only supports l ≤ 1
-    # howmany dimensions in fftwf_plan_guru64_dft, but BART uses l = D − k (up
-    # to 15 for DIMS=16 arrays), causing plan creation to fail silently.
-    #
-    # Search for system libfftw3f first; fall back to MKL only when unavailable.
-    find_library(_sys_fftw3f_lib NAMES fftw3f
-        PATHS /usr/lib /usr/lib64 /usr/lib/x86_64-linux-gnu
-              /usr/local/lib /usr/local/lib64
-        NO_DEFAULT_PATH)
-    find_path(_sys_fftw3f_inc NAMES fftw3.h
-        PATHS /usr/include /usr/local/include
-        NO_DEFAULT_PATH)
-
-    if(_sys_fftw3f_lib AND _sys_fftw3f_inc)
-        set(FFTW3F_INCLUDE_DIR "${_sys_fftw3f_inc}")
-        set(FFTW3F_LIBRARY     "${_sys_fftw3f_lib}")
-        message(STATUS "FFT: system libfftw3f (preferred over MKL wrapper)")
-        message(STATUS "  headers : ${_sys_fftw3f_inc}")
-        message(STATUS "  runtime : ${_sys_fftw3f_lib}")
-    else()
-        # System libfftw3f not found — fall back to MKL's FFTW3 compat layer.
-        # Note: MKL's wrapper does not support l > 1 howmany dims in the guru64
-        # interface, so BART FFT commands may produce wrong output on arrays with
-        # more than one transform dimension batched over many trailing unit dims.
-        # Install libfftw3-dev to fix this:  apt-get install libfftw3-dev
-        set(FFTW3F_INCLUDE_DIR "${_mkl_include_dir}/fftw")
-        set(FFTW3F_LIBRARY     "${_mkl_rt_lib}")
-        message(STATUS "FFT: MKL FFTW3 compat (system libfftw3f not found)")
-        message(STATUS "  Install libfftw3-dev for correct multi-dim FFT support")
-    endif()
 else()
-    # MKL is required for CBLAS.  It is co-installed with torch in any standard
-    # Python environment.  If this error fires, ensure mkl-include is installed:
+    # MKL is required — it provides both CBLAS and the FFTW3 compatibility
+    # layer used by BART's FFT routines and FINUFFT.  There is no system
+    # BLAS or FFTW3 fallback: MKL is the only supported backend.
+    #
+    # MKL is co-installed with torch in any standard Python environment.
+    # If this error fires, ensure mkl-include is installed alongside torch:
     #   pip install mkl mkl-include
     message(FATAL_ERROR
         "MKL not found in any Python root (searched: ${_py_roots}).\n"
@@ -520,16 +498,12 @@ target_include_directories(bart_static PUBLIC
 )
 target_compile_options(bart_static PRIVATE -fPIC -O2 -std=gnu11)
 
-# Link order: FFTW3F must come BEFORE CBLAS (MKL) so that fftwf_* symbols are
-# resolved from the real libfftw3f rather than MKL's FFTW3 compat wrapper.
-# MKL's wrapper does not support l > 1 howmany dims in fftwf_plan_guru64_dft,
-# which breaks BART's FFT for DIMS=16 arrays (l = D - k = 15).
-# When FFTW3F_LIBRARY == CBLAS_LIBRARY (MKL-only fallback), the duplicate
-# is harmless — CMake deduplicates identical consecutive entries.
+# Link order: PyTorch → MKL (covers both CBLAS and the fftwf_* symbols that
+# mkl_fftw_shim.c intercepts).  FFTW3F_LIBRARY == CBLAS_LIBRARY == libmkl_rt.
 target_link_libraries(bart_static PUBLIC
     ${TORCH_LIBRARIES}
-    ${FFTW3F_LIBRARY}
     ${CBLAS_LIBRARY}
+    ${FFTW3F_LIBRARY}
 )
 
 if(USE_CUDA)
@@ -564,15 +538,22 @@ else()
                     "type_casters may be unresolved at import time")
 endif()
 
+# ---------------------------------------------------------------------------
+# MKL FFTW3 shim — intercepts fftwf_plan_guru64_dft via --wrap and routes to
+# MKL DFTI.  MKL's FFTW3 compat layer rejects l > 1 howmany dims; DFTI has
+# no such limitation.  The shim requires mkl_dfti.h from the MKL headers.
+# ---------------------------------------------------------------------------
 pybind11_add_module(_bartorch_ext
     bartorch_ext.cpp
     bart_ops.cpp
     torch_prior.cpp
     torch_prior_nlop.c
+    mkl_fftw_shim.c
 )
 target_include_directories(_bartorch_ext PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}
     ${BART_SRC_DIR}
+    ${CBLAS_INCLUDE_DIR}
 )
 target_link_libraries(_bartorch_ext PRIVATE
     bart_static
@@ -580,6 +561,32 @@ target_link_libraries(_bartorch_ext PRIVATE
     ${TORCH_PYTHON_LIBRARY}
 )
 target_compile_definitions(_bartorch_ext PRIVATE ${BART_DEFS})
+
+# --wrap the fftwf_* symbols so mkl_fftw_shim.c intercepts them
+if(APPLE)
+    target_link_options(_bartorch_ext PRIVATE
+        -Wl,-wrap,_fftwf_plan_guru64_dft
+        -Wl,-wrap,_fftwf_execute_dft
+        -Wl,-wrap,_fftwf_destroy_plan
+        -Wl,-wrap,_fftwf_export_wisdom_to_filename
+        -Wl,-wrap,_fftwf_import_wisdom_from_filename
+        -Wl,-wrap,_fftwf_init_threads
+        -Wl,-wrap,_fftwf_plan_with_nthreads
+        -Wl,-wrap,_fftwf_cleanup_threads
+    )
+else()
+    target_link_options(_bartorch_ext PRIVATE
+        -Wl,--wrap,fftwf_plan_guru64_dft
+        -Wl,--wrap,fftwf_execute_dft
+        -Wl,--wrap,fftwf_destroy_plan
+        -Wl,--wrap,fftwf_export_wisdom_to_filename
+        -Wl,--wrap,fftwf_import_wisdom_from_filename
+        -Wl,--wrap,fftwf_init_threads
+        -Wl,--wrap,fftwf_plan_with_nthreads
+        -Wl,--wrap,fftwf_cleanup_threads
+    )
+endif()
+message(STATUS "FFTW shim: --wrap fftwf_plan_guru64_dft (MKL DFTI backend)")
 
 if(BARTORCH_USE_FINUFFT)
     # finufft_grid.cpp provides __wrap_grid2 / __wrap_grid2H.

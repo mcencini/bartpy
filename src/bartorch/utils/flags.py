@@ -3,9 +3,12 @@ bartorch.utils.flags — Axis-index → BART bitmask conversion.
 
 BART internally numbers axes in Fortran (column-major) order.  bartorch
 exposes a C-order (row-major) API matching NumPy/PyTorch conventions.
-This module provides :func:`axes_to_flags` to convert C-order axis indices
+This module provides :func:`_axes_to_flags` to convert C-order axis indices
 (including negative indices) into the BART bitmask expected by tools such as
 ``fft``.
+
+This is an **internal** helper used by ``bartorch.tools`` wrappers.  It is
+not part of the public API.
 
 Axis mapping for a tensor with *ndim* dimensions
 -------------------------------------------------
@@ -24,27 +27,29 @@ Examples
 --------
 FFT over the last two axes of a 3-D tensor (coils, ny, nx):
 
->>> axes_to_flags((1, 2), ndim=3)   # ny and nx → BART axes 1 and 0
+>>> _axes_to_flags((1, 2), ndim=3)   # ny and nx → BART axes 1 and 0
 3
->>> axes_to_flags((-1, -2), ndim=3)  # same
+>>> _axes_to_flags((-1, -2), ndim=3)  # same
 3
 
 Single axis:
 
->>> axes_to_flags(0, ndim=2)  # first axis of a 2-D tensor → BART axis 1
+>>> _axes_to_flags(0, ndim=2)  # first axis of a 2-D tensor → BART axis 1
 2
 """
 
 from __future__ import annotations
 
-__all__ = ["axes_to_flags"]
+__all__: list[str] = []
 
 
-def axes_to_flags(
+def _axes_to_flags(
     axes: int | tuple[int, ...] | list[int],
     ndim: int,
 ) -> int:
     """Convert C-order axis indices to a BART bitmask (Fortran-order bits).
+
+    This is an **internal** helper; it is not part of the public bartorch API.
 
     Parameters
     ----------
@@ -68,11 +73,11 @@ def axes_to_flags(
 
     Examples
     --------
-    >>> axes_to_flags((-1, -2), ndim=3)
+    >>> _axes_to_flags((-1, -2), ndim=3)
     3
-    >>> axes_to_flags((0, 1, 2), ndim=3)
+    >>> _axes_to_flags((0, 1, 2), ndim=3)
     7
-    >>> axes_to_flags(2, ndim=3)
+    >>> _axes_to_flags(2, ndim=3)
     1
     """
     if ndim < 1:

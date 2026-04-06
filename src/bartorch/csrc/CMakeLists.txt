@@ -35,6 +35,16 @@ set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} ${TORCH_CXX_FLAGS}")
 # Find Python (for pybind11 / extension suffix)
 # ---------------------------------------------------------------------------
 find_package(Python3 REQUIRED COMPONENTS Interpreter Development)
+
+# Disable LTO before finding pybind11 so pybind11_add_module never adds
+# pybind11::lto.  GNU ld's --wrap resolves symbols AFTER LTO inlines them,
+# so --wrap,fftwf_*/grid2/rolloff would silently have no effect with LTO on.
+# Setting CMAKE_INTERPROCEDURAL_OPTIMIZATION here is the only reliable way:
+# pybind11 3.x checks `if(NOT DEFINED CMAKE_INTERPROCEDURAL_OPTIMIZATION)`
+# and skips its -flto injection only when the variable is already defined.
+set(CMAKE_INTERPROCEDURAL_OPTIMIZATION OFF CACHE BOOL
+    "Disable LTO so GNU --wrap symbols are applied correctly at link time")
+
 find_package(pybind11 CONFIG QUIET)
 if(NOT pybind11_FOUND)
     # Fallback: use pybind11 bundled with PyTorch.
@@ -61,6 +71,7 @@ set(BART_SRC_DIR "${CMAKE_SOURCE_DIR}/../../../bart/src")
 set(BART_DEFS
     BART_WITH_PYTHON         # suppress abort() → RuntimeError
     NO_MCU                   # skip microcontroller code
+    NO_PNG                   # disable libpng dependency in misc/png.c
     # NOTE: MEMONLY_CFL is intentionally NOT set here.
     # At this BART commit, defining MEMONLY_CFL hides the declarations of
     # shared_cfl / private_cfl in mmio.h while mmio.c still references them
@@ -68,6 +79,10 @@ set(BART_DEFS
     # In-memory tensor registration uses names with the ".mem" suffix (e.g.
     # "input.mem"), which BART routes through the memory CFL subsystem at
     # runtime regardless of the MEMONLY_CFL compile flag.
+    # NOTE: NOLAPACKE is intentionally NOT set. With USE_MKL (set below when
+    # MKL is detected), num/lapack.c includes <mkl.h> via "#elif USE_MKL".
+    # NOLAPACKE would override that branch and pull in bart/src/lapacke/*.h
+    # which in turn needs system lapack.h — not available without LAPACK dev headers.
 )
 if(USE_CUDA)
     list(APPEND BART_DEFS USE_CUDA)
@@ -210,15 +225,18 @@ foreach(_root ${_py_roots})
     endif()
 endforeach()
 
-# ── MKL found — use it ───────────────────────────────────────────────────────
+# ── MKL found — use it for CBLAS + FFTW3 (via mkl_fftw_shim) ────────────────
 if(_mkl_include_dir AND _mkl_rt_lib)
     set(CBLAS_INCLUDE_DIR  "${_mkl_include_dir}")
     set(CBLAS_LIBRARY      "${_mkl_rt_lib}")
-    # MKL ships a drop-in FFTW3 compatibility layer; headers live in fftw/
+    # MKL ships a drop-in FFTW3 compatibility layer; headers live in fftw/.
+    # The actual fftwf_plan_guru64_dft symbol is provided at runtime by MKL's
+    # FFTW3 compat layer, but we intercept it with our mkl_fftw_shim.c (see
+    # below) so that BART's multi-dimensional FFTs work correctly.
     set(FFTW3F_INCLUDE_DIR "${_mkl_include_dir}/fftw")
     set(FFTW3F_LIBRARY     "${_mkl_rt_lib}")
     list(APPEND BART_DEFS USE_MKL)
-    message(STATUS "BLAS+FFT: MKL")
+    message(STATUS "BLAS+FFT: MKL (fftwf shim via MKL DFTI)")
     message(STATUS "  headers : ${_mkl_include_dir}")
     message(STATUS "  runtime : ${_mkl_rt_lib}")
 else()
@@ -250,7 +268,7 @@ endif()
 # system libfftw3f (fallback path) — by setting FINUFFT_FFTW_LIBRARIES.
 # ---------------------------------------------------------------------------
 if(BARTORCH_USE_FINUFFT)
-    set(_finufft_dir "${CMAKE_SOURCE_DIR}/../../finufft")
+    set(_finufft_dir "${CMAKE_SOURCE_DIR}/../../../finufft")
     if(NOT IS_DIRECTORY "${_finufft_dir}")
         message(WARNING
             "BARTORCH_USE_FINUFFT=ON but finufft/ submodule not found at "
@@ -398,60 +416,86 @@ endif()
 
 # ---------------------------------------------------------------------------
 # BART static library target
-# The minimal set of BART source files needed for the initial op set.
-# This list will grow as more ops are wrapped.
+#
+# Source selection mirrors BART's own Makefile, which uses:
+#   $(wildcard $(srcdir)/$(module)/*.c)
+# i.e. ALL .c files in each required module directory.
+#
+# Doing the same here with file(GLOB) avoids the class of bugs caused by
+# hand-picking files and missing transitive dependencies (e.g. num/optimize.c
+# defines `num_chunk_size`, a data symbol referenced by num/init.c; missing it
+# causes an undefined-symbol ImportError at Python load time).
+#
+# Optional-feature files are made safe by compile definitions:
+#   NO_PNG     — misc/png.c: skips libpng I/O behind #ifndef NO_PNG
+#   USE_MKL    — num/lapack.c: selects <mkl.h> LAPACK header (set by MKL block above)
+#   (no USE_CUDA)  — num/gpuops.c, fft-cuda.c, etc. are entirely inside
+#                     #ifdef USE_CUDA so they compile cleanly as no-ops.
+#   (no USE_MPI)   — num/mpi_ops.c guards all symbols with #ifdef USE_MPI.
 # ---------------------------------------------------------------------------
-# Note: a full build would use BART's own Makefile; for the extension we
-# compile only the files we need to keep the wheel small and build fast.
-# The authoritative list is maintained in agents.md §§ Build System.
+file(GLOB _bart_misc_srcs    "${BART_SRC_DIR}/misc/*.c")
+file(GLOB _bart_num_srcs     "${BART_SRC_DIR}/num/*.c")
+file(GLOB _bart_simu_srcs    "${BART_SRC_DIR}/simu/*.c")
+file(GLOB _bart_linops_srcs  "${BART_SRC_DIR}/linops/*.c")
+file(GLOB _bart_wavelet_srcs "${BART_SRC_DIR}/wavelet/*.c")
+file(GLOB _bart_iter_srcs    "${BART_SRC_DIR}/iter/*.c")
+file(GLOB _bart_nlops_srcs   "${BART_SRC_DIR}/nlops/*.c")
+file(GLOB _bart_noncart_srcs "${BART_SRC_DIR}/noncart/*.c")
+file(GLOB _bart_calib_srcs   "${BART_SRC_DIR}/calib/*.c")
+file(GLOB _bart_grecon_srcs  "${BART_SRC_DIR}/grecon/*.c")
+file(GLOB _bart_lowrank_srcs "${BART_SRC_DIR}/lowrank/*.c")
+file(GLOB _bart_networks_srcs "${BART_SRC_DIR}/networks/*.c")
+file(GLOB _bart_nn_srcs      "${BART_SRC_DIR}/nn/*.c")
+file(GLOB _bart_noir_srcs    "${BART_SRC_DIR}/noir/*.c")
+file(GLOB _bart_sense_srcs   "${BART_SRC_DIR}/sense/*.c")
+file(GLOB _bart_motion_srcs  "${BART_SRC_DIR}/motion/*.c")
+file(GLOB _bart_moba_srcs    "${BART_SRC_DIR}/moba/*.c")
+file(GLOB _bart_sake_srcs    "${BART_SRC_DIR}/sake/*.c")
+file(GLOB _bart_geom_srcs    "${BART_SRC_DIR}/geom/*.c")
+file(GLOB _bart_seq_srcs     "${BART_SRC_DIR}/seq/*.c")
+file(GLOB _bart_stl_srcs     "${BART_SRC_DIR}/stl/*.c")
+# Top-level tool files: each bart/src/<tool>.c provides main_<tool>()
+# as well as the main dispatcher (bart.c) and entry-point wrapper (main.c).
+file(GLOB _bart_tools_srcs   "${BART_SRC_DIR}/*.c")
+
+# Exclude files that require external optional libraries without #ifdef guards:
+#
+# ismrmrd.c       — includes ismrm/read.h → ismrmrd/ismrmrd.h (libismrmrd).
+#                   BART's Makefile only adds this when ISMRM_BASE is set.
+# ismrm/read.c    — same reason (libismrmrd).
+# win/*.c         — Windows POSIX compatibility shims (mmap, fmemopen) that
+#                   redefine POSIX functions already present on Linux/macOS.
+# lapacke/*.c     — BART's bundled LAPACKE shim: requires system lapack.h.
+#                   With MKL (USE_MKL=1) LAPACKE is provided by libmkl_rt.so;
+#                   we don't need the bundled implementation.
+list(REMOVE_ITEM _bart_tools_srcs "${BART_SRC_DIR}/ismrmrd.c")
+
 set(BART_SOURCES
-    # misc
-    ${BART_SRC_DIR}/misc/misc.c
-    ${BART_SRC_DIR}/misc/debug.c
-    ${BART_SRC_DIR}/misc/io.c
-    ${BART_SRC_DIR}/misc/mmio.c
-    ${BART_SRC_DIR}/misc/memcfl.c
-    ${BART_SRC_DIR}/misc/stream.c
-    ${BART_SRC_DIR}/misc/stream_protocol.c
-    ${BART_SRC_DIR}/misc/lock.c
-    ${BART_SRC_DIR}/misc/shrdptr.c
-    ${BART_SRC_DIR}/misc/list.c
-    ${BART_SRC_DIR}/misc/opts.c
-    ${BART_SRC_DIR}/misc/utils.c
-    ${BART_SRC_DIR}/misc/version.c
-    # num
-    ${BART_SRC_DIR}/num/multind.c
-    ${BART_SRC_DIR}/num/flpmath.c
-    ${BART_SRC_DIR}/num/fft.c
-    ${BART_SRC_DIR}/num/fft_plan.c
-    ${BART_SRC_DIR}/num/blas.c
-    ${BART_SRC_DIR}/num/vecops.c
-    ${BART_SRC_DIR}/num/rand.c
-    ${BART_SRC_DIR}/num/init.c
-    ${BART_SRC_DIR}/num/vptr.c
-    ${BART_SRC_DIR}/num/delayed.c
-    ${BART_SRC_DIR}/num/mpi_ops.c
-    # num — additional modules needed by noncart/grid.c and noncart/nufft.c
-    ${BART_SRC_DIR}/num/specfun.c
-    ${BART_SRC_DIR}/num/multiplace.c
-    ${BART_SRC_DIR}/num/vptr_fun.c
-    # simu
-    ${BART_SRC_DIR}/simu/phantom.c
-    ${BART_SRC_DIR}/simu/shape.c
-    # linops
-    ${BART_SRC_DIR}/linops/linop.c
-    ${BART_SRC_DIR}/linops/someops.c
-    ${BART_SRC_DIR}/linops/fmac.c
-    # iter
-    ${BART_SRC_DIR}/iter/iter.c
-    ${BART_SRC_DIR}/iter/iter2.c
-    ${BART_SRC_DIR}/iter/prox.c
-    ${BART_SRC_DIR}/iter/thresh.c
-    # noncart — KB gridding helpers (grid2/grid2H replaced by finufft_grid.cpp via --wrap)
-    ${BART_SRC_DIR}/noncart/grid.c
-    # embed API + main dispatcher
-    ${BART_SRC_DIR}/main.c
-    ${BART_SRC_DIR}/bart.c
+    ${_bart_misc_srcs}
+    ${_bart_num_srcs}
+    ${_bart_simu_srcs}
+    ${_bart_linops_srcs}
+    ${_bart_wavelet_srcs}
+    ${_bart_iter_srcs}
+    ${_bart_nlops_srcs}
+    ${_bart_noncart_srcs}
+    ${_bart_calib_srcs}
+    ${_bart_grecon_srcs}
+    ${_bart_lowrank_srcs}
+    ${_bart_networks_srcs}
+    ${_bart_nn_srcs}
+    ${_bart_noir_srcs}
+    ${_bart_sense_srcs}
+    ${_bart_motion_srcs}
+    ${_bart_moba_srcs}
+    ${_bart_sake_srcs}
+    ${_bart_geom_srcs}
+    ${_bart_seq_srcs}
+    ${_bart_stl_srcs}
+    ${_bart_tools_srcs}
+    # ismrm/read.c is intentionally excluded (requires libismrmrd).
+    # win/*.c is intentionally excluded (Windows-only POSIX shims).
+    # lapacke/*.c is intentionally excluded (MKL provides LAPACKE).
 )
 
 add_library(bart_static STATIC ${BART_SOURCES})
@@ -464,9 +508,8 @@ target_include_directories(bart_static PUBLIC
 )
 target_compile_options(bart_static PRIVATE -fPIC -O2 -std=gnu11)
 
-# Link order: PyTorch (tensor ops) → MKL or system CBLAS+FFTW3.
-# When MKL path is active, CBLAS_LIBRARY and FFTW3F_LIBRARY both point to
-# libmkl_rt.so — a single lib that covers both BLAS and FFT.
+# Link order: PyTorch → MKL (covers both CBLAS and the fftwf_* symbols that
+# mkl_fftw_shim.c intercepts).  FFTW3F_LIBRARY == CBLAS_LIBRARY == libmkl_rt.
 target_link_libraries(bart_static PUBLIC
     ${TORCH_LIBRARIES}
     ${CBLAS_LIBRARY}
@@ -480,18 +523,80 @@ endif()
 # ---------------------------------------------------------------------------
 # _bartorch_ext Python extension module
 # ---------------------------------------------------------------------------
+
+# Find libtorch_python.so — it contains pybind11 type_caster specialisations
+# for at::Tensor.  find_package(Torch) does NOT add it to TORCH_LIBRARIES, but
+# any extension that converts Python objects ↔ torch.Tensor must link it.
+find_library(TORCH_PYTHON_LIBRARY
+    NAMES torch_python
+    PATHS "${TORCH_INSTALL_PREFIX}/lib"
+    NO_DEFAULT_PATH
+)
+if(NOT TORCH_PYTHON_LIBRARY)
+    # Fallback: search inside the torch package directory discovered during
+    # MKL detection (same parent as site-packages/torch/lib/).
+    find_library(TORCH_PYTHON_LIBRARY
+        NAMES torch_python
+        PATHS "${_mkl_site_packages}/torch/lib"
+        NO_DEFAULT_PATH
+    )
+endif()
+if(TORCH_PYTHON_LIBRARY)
+    message(STATUS "Found libtorch_python: ${TORCH_PYTHON_LIBRARY}")
+else()
+    message(WARNING "libtorch_python not found — torch.Tensor pybind11 "
+                    "type_casters may be unresolved at import time")
+endif()
+
+# ---------------------------------------------------------------------------
+# MKL FFTW3 shim — intercepts fftwf_plan_guru64_dft via --wrap and routes to
+# MKL DFTI.  MKL's FFTW3 compat layer rejects l > 1 howmany dims; DFTI has
+# no such limitation.  The shim requires mkl_dfti.h from the MKL headers.
+# ---------------------------------------------------------------------------
 pybind11_add_module(_bartorch_ext
     bartorch_ext.cpp
     bart_ops.cpp
     torch_prior.cpp
     torch_prior_nlop.c
+    mkl_fftw_shim.c
 )
 target_include_directories(_bartorch_ext PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}
     ${BART_SRC_DIR}
+    ${CBLAS_INCLUDE_DIR}
 )
-target_link_libraries(_bartorch_ext PRIVATE bart_static ${TORCH_LIBRARIES})
+target_link_libraries(_bartorch_ext PRIVATE
+    bart_static
+    ${TORCH_LIBRARIES}
+    ${TORCH_PYTHON_LIBRARY}
+)
 target_compile_definitions(_bartorch_ext PRIVATE ${BART_DEFS})
+
+# --wrap the fftwf_* symbols so mkl_fftw_shim.c intercepts them
+if(APPLE)
+    target_link_options(_bartorch_ext PRIVATE
+        -Wl,-wrap,_fftwf_plan_guru64_dft
+        -Wl,-wrap,_fftwf_execute_dft
+        -Wl,-wrap,_fftwf_destroy_plan
+        -Wl,-wrap,_fftwf_export_wisdom_to_filename
+        -Wl,-wrap,_fftwf_import_wisdom_from_filename
+        -Wl,-wrap,_fftwf_init_threads
+        -Wl,-wrap,_fftwf_plan_with_nthreads
+        -Wl,-wrap,_fftwf_cleanup_threads
+    )
+else()
+    target_link_options(_bartorch_ext PRIVATE
+        -Wl,--wrap,fftwf_plan_guru64_dft
+        -Wl,--wrap,fftwf_execute_dft
+        -Wl,--wrap,fftwf_destroy_plan
+        -Wl,--wrap,fftwf_export_wisdom_to_filename
+        -Wl,--wrap,fftwf_import_wisdom_from_filename
+        -Wl,--wrap,fftwf_init_threads
+        -Wl,--wrap,fftwf_plan_with_nthreads
+        -Wl,--wrap,fftwf_cleanup_threads
+    )
+endif()
+message(STATUS "FFTW shim: --wrap fftwf_plan_guru64_dft (MKL DFTI backend)")
 
 if(BARTORCH_USE_FINUFFT)
     # finufft_grid.cpp provides __wrap_grid2 / __wrap_grid2H.

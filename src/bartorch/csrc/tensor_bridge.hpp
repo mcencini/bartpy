@@ -1,30 +1,21 @@
 /*
- * tensor_bridge.hpp — Zero-copy bridge between torch::Tensor and BART CFL.
+ * tensor_bridge.hpp — Axis-reversal helpers for torch::Tensor ↔ BART CFL.
  *
- * Design
- * ------
- * BART's in-memory CFL registry stores named ``complex float*`` buffers.
- * A ``torch::Tensor`` of dtype ``complex64`` in column-major (Fortran) order
- * has the identical memory layout.  Therefore we can:
+ * Design note
+ * -----------
+ * BART stores arrays in Fortran (column-major) order with shape
+ * [d_0, d_1, …, d_{N-1}] where d_0 is the fastest-varying axis ("read").
  *
- *   1. Register an existing tensor's data_ptr() as a non-owned CFL entry
- *      (BART does NOT free the memory; PyTorch retains ownership).
- *   2. Allocate a new tensor with Fortran strides, register it as an output
- *      CFL entry, and let bart_command() write directly into the tensor.
+ * bartorch exposes arrays in C-order with the axes *reversed*:
+ * Python shape = [d_{N-1}, …, d_1, d_0].
  *
- * No copies are performed in either direction for CPU tensors.
- * For CUDA tensors, see cuda/cuda_bridge.hpp — the same approach applies
- * when BART is compiled with USE_CUDA: BART's vptr system recognises device
- * pointers and dispatches GPU kernels transparently.
+ * Because a C-order tensor with shape (a, b, c) and a Fortran-order
+ * array with shape (c, b, a) share the *identical* byte layout, no copy
+ * is needed at the boundary — only the dim vector is reversed.
  *
- * Utility functions
- * -----------------
- *   fortran_strides(dims)   — compute column-major stride vector
- *   is_bart_compatible(t)   — true iff t is complex64 + Fortran strides
- *   make_bart_tensor(dims)  — allocate output tensor with Fortran strides
- *   register_input(name, t) — call register_mem_cfl_non_managed()
- *   register_output(name,t) — same, used for pre-allocated outputs
- *   unlink_cfl(name)        — memcfl_unlink() after bart_command() returns
+ * This header contains utility functions used by bartorch_ext.cpp.
+ * The actual BART dispatch happens in bartorch_ext.cpp via BART's own
+ * internal headers (misc/memcfl.h, etc.).
  */
 
 #pragma once
@@ -33,22 +24,17 @@
 #include <vector>
 #include <string>
 
-// bart_embed_api.h already guards itself with extern "C" and uses void* for
-// all pointer parameters, making it safe to include from C++.
-#include "bart_embed_api.h"
-
-// memcfl_unlink is not in bart_embed_api.h but we only need its name;
-// declare it directly using a C++-compatible signature (no VLA, no complex).
-extern "C" {
-    void memcfl_unlink(const char* name);
-}
-
 namespace bartorch {
 
 // ---------------------------------------------------------------------------
 // Stride helpers
 // ---------------------------------------------------------------------------
 
+/**
+ * Compute column-major (Fortran) strides for the given shape.
+ *
+ * ``strides[0] = 1``, ``strides[i] = strides[i-1] * dims[i-1]``.
+ */
 inline std::vector<int64_t> fortran_strides(const std::vector<int64_t>& dims)
 {
     std::vector<int64_t> strides(dims.size());
@@ -60,11 +46,13 @@ inline std::vector<int64_t> fortran_strides(const std::vector<int64_t>& dims)
     return strides;
 }
 
+/**
+ * Return true iff ``t`` is complex64 with Fortran (column-major) strides.
+ */
 inline bool is_bart_compatible(const torch::Tensor& t)
 {
-    if (t.dtype() != torch::kComplexFloat)
-        return false;
-    auto dims = t.sizes().vec();
+    if (t.dtype() != torch::kComplexFloat) return false;
+    auto dims     = t.sizes().vec();
     auto expected = fortran_strides(dims);
     auto actual   = t.strides().vec();
     return expected == actual;
@@ -75,10 +63,11 @@ inline bool is_bart_compatible(const torch::Tensor& t)
 // ---------------------------------------------------------------------------
 
 /**
- * Allocate an uninitialised complex64 tensor with Fortran (column-major)
- * strides on the requested device.
+ * Allocate an uninitialised complex64 tensor with Fortran strides on
+ * the requested device.
  *
- * The tensor is the canonical "output slot" that bart_command() writes into.
+ * The result is the canonical "output slot" used when pre-allocating before
+ * calling bart_command() (e.g. for CUDA paths where BART writes directly).
  */
 inline torch::Tensor make_bart_tensor(
     const std::vector<int64_t>& dims,
@@ -87,58 +76,10 @@ inline torch::Tensor make_bart_tensor(
     auto opts = torch::TensorOptions()
                     .dtype(torch::kComplexFloat)
                     .device(device);
-
-    // Allocate storage with reversed dims (Fortran trick), then view back.
+    // Allocate with reversed dims in C-order, then as_strided back.
     std::vector<int64_t> rdims(dims.rbegin(), dims.rend());
     auto storage = torch::empty(rdims, opts).contiguous();
-
     return storage.as_strided(dims, fortran_strides(dims));
-}
-
-// ---------------------------------------------------------------------------
-// CFL registry operations
-// ---------------------------------------------------------------------------
-
-/**
- * Register a tensor's data buffer in BART's in-memory CFL registry without
- * transferring ownership.  The tensor must remain alive for the duration of
- * the bart_command() call.
- *
- * @param name   Unique *.mem name (e.g. "_bt_abc123.mem").
- * @param t      BartTensor (must satisfy is_bart_compatible()).
- */
-inline void register_input(const std::string& name, const torch::Tensor& t)
-{
-    TORCH_CHECK(is_bart_compatible(t),
-                "register_input: tensor must be complex64 with Fortran strides");
-
-    auto dims_i64 = t.sizes().vec();
-    std::vector<long> dims(dims_i64.begin(), dims_i64.end());
-
-    // register_mem_cfl_non_managed does not take ownership; BART will not free
-    // the pointer.  Equivalent to memcfl_register(..., managed=false).
-    register_mem_cfl_non_managed(
-        name.c_str(),
-        static_cast<unsigned int>(dims.size()),
-        dims.data(),
-        t.data_ptr());
-}
-
-/**
- * Register a pre-allocated output tensor (same semantics as register_input).
- */
-inline void register_output(const std::string& name, torch::Tensor& t)
-{
-    register_input(name, t);
-}
-
-/**
- * Remove a name from the in-memory CFL registry after bart_command() returns.
- * Since the tensor is non-managed, BART will NOT free the underlying memory.
- */
-inline void unlink_cfl(const std::string& name)
-{
-    memcfl_unlink(name.c_str());
 }
 
 } // namespace bartorch

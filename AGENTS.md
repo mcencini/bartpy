@@ -284,21 +284,31 @@ with bart_context():
 - **Backend:** `scikit-build-core >= 0.9`
 - **CMake source:** `src/bartorch/csrc/CMakeLists.txt`
 - **PyTorch integration:** self-detects `torch.utils.cmake_prefix_path`
-- **BART static lib:** compiled from selected source files (not the full suite)
+- **BART static lib:** all `.c` files from each required BART module directory (glob approach, matching BART's own Makefile)
 - **BLAS/FFT:** reuses PyTorch's bundled MKL / OpenBLAS / cuFFT
 - **FINUFFT:** statically linked from the `finufft/` submodule (see below)
 
-### Minimal BART source set
+### BART source set (glob-per-module)
 
-| Module | Purpose |
-|--------|---------|
-| `misc/` | io, mmio, memcfl, stream, debug, opts, utils |
-| `num/`  | multind, flpmath, fft, blas, vecops, rand, specfun, multiplace, vptr_fun |
-| `simu/` | phantom, shape |
-| `linops/` | linop, someops, fmac |
-| `iter/` | iter, iter2, prox, thresh |
-| `noncart/` | grid.c (KB helpers kept; grid2/grid2H replaced by FINUFFT at link time) |
-| embed   | bart_embed_api.c, main.c, bart.c |
+CMakeLists.txt uses `file(GLOB ...)` for each BART module directory, exactly
+mirroring BART's Makefile which uses `$(wildcard $(srcdir)/$(module)/*.c)`.
+This avoids the error-prone hand-picked file approach (e.g. forgetting
+`num/optimize.c` causes `undefined symbol: num_chunk_size` at Python import time).
+
+Optional-feature files are safe to include because BART guards them with
+`#ifdef`/`#ifndef` compile flags:
+
+| Module | Glob pattern | Optional-dep guard |
+|--------|-------------|-------------------|
+| `misc/` | `misc/*.c` | `-DNO_PNG` disables libpng in `misc/png.c` |
+| `num/`  | `num/*.c`  | `-DUSE_MKL` selects MKL LAPACK; `#ifdef USE_CUDA` guards GPU files |
+| `simu/` | `simu/*.c` | no optional deps |
+| `linops/` | `linops/*.c` | no optional deps |
+| `wavelet/` | `wavelet/*.c` | `#ifdef USE_CUDA` guards GPU kernels |
+| `iter/` | `iter/*.c` | no optional deps |
+| `nlops/` | `nlops/*.c` | no optional deps |
+| `noncart/` | `noncart/*.c` | `grid2`/`grid2H` replaced by FINUFFT at link time |
+| embed | `main.c`, `bart.c` | explicit (not in a module subdir) |
 
 ### FINUFFT silent grid replacement
 

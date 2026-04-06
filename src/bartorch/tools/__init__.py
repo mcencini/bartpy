@@ -10,8 +10,8 @@ Axis indices (C-order)
 ----------------------
 Where BART expects a bitmask to select axes, the Python wrappers accept a
 scalar axis index or a tuple of indices instead — including negative indices.
-The conversion to BART's Fortran-order bitmask is handled transparently by
-:func:`bartorch.utils.flags.axes_to_flags`.
+The conversion to BART's Fortran-order bitmask is handled transparently inside
+each wrapper (see :func:`bartorch.utils.flags._axes_to_flags`).
 
 Example: ``bt.fft(x, axes=(-1, -2))`` — 2-D FFT over the last two axes.
 

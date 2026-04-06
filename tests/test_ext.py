@@ -60,7 +60,7 @@ def _nrmse(a: torch.Tensor, b: torch.Tensor) -> float:
 
 
 def test_fft_roundtrip():
-    """bt.fft followed by bt.ifft reproduces N² × input within float32 tolerance."""
+    """bt.fft followed by bt.ifft reproduces total_elements × input within float32 tolerance."""
     ph = bt.phantom([32, 32])
     ksp = bt.fft(ph, axes=(-1, -2))
     img = bt.ifft(ksp, axes=(-1, -2))

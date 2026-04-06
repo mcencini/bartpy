@@ -112,7 +112,8 @@ def test_es_rolloff_monotone():
 def test_adjointness_2d():
     """Adjointness of NUFFT forward/adjoint for a 2-D radial trajectory.
 
-    Checks:  |⟨A x, y⟩ − ⟨x, A^H y⟩| / ‖s2‖ < tol
+    Checks: |⟨A·n1, n2⟩ − ⟨n1, A^H·n2⟩| / ‖s2‖ < tol
+    where k = A·n1 (forward), x = A^H·n2 (adjoint).
     """
     import torch
 

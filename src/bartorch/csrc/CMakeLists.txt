@@ -215,24 +215,49 @@ foreach(_root ${_py_roots})
     endif()
 endforeach()
 
-# ── MKL found — use it ───────────────────────────────────────────────────────
+# ── MKL found — use it for CBLAS ─────────────────────────────────────────────
 if(_mkl_include_dir AND _mkl_rt_lib)
     set(CBLAS_INCLUDE_DIR  "${_mkl_include_dir}")
     set(CBLAS_LIBRARY      "${_mkl_rt_lib}")
-    # MKL ships a drop-in FFTW3 compatibility layer; headers live in fftw/
-    set(FFTW3F_INCLUDE_DIR "${_mkl_include_dir}/fftw")
-    set(FFTW3F_LIBRARY     "${_mkl_rt_lib}")
     list(APPEND BART_DEFS USE_MKL)
-    message(STATUS "BLAS+FFT: MKL")
+    message(STATUS "BLAS: MKL")
     message(STATUS "  headers : ${_mkl_include_dir}")
     message(STATUS "  runtime : ${_mkl_rt_lib}")
-else()
-    # MKL is required — it provides both CBLAS and the FFTW3 compatibility
-    # layer used by BART's FFT routines and FINUFFT.  There is no system
-    # BLAS or FFTW3 fallback: MKL is the only supported backend.
+
+    # For FFTW3 (used by BART's FFT and FINUFFT), prefer the real libfftw3f over
+    # MKL's FFTW3 compatibility wrapper.  MKL's wrapper only supports l ≤ 1
+    # howmany dimensions in fftwf_plan_guru64_dft, but BART uses l = D − k (up
+    # to 15 for DIMS=16 arrays), causing plan creation to fail silently.
     #
-    # MKL is co-installed with torch in any standard Python environment.
-    # If this error fires, ensure mkl-include is installed alongside torch:
+    # Search for system libfftw3f first; fall back to MKL only when unavailable.
+    find_library(_sys_fftw3f_lib NAMES fftw3f
+        PATHS /usr/lib /usr/lib64 /usr/lib/x86_64-linux-gnu
+              /usr/local/lib /usr/local/lib64
+        NO_DEFAULT_PATH)
+    find_path(_sys_fftw3f_inc NAMES fftw3.h
+        PATHS /usr/include /usr/local/include
+        NO_DEFAULT_PATH)
+
+    if(_sys_fftw3f_lib AND _sys_fftw3f_inc)
+        set(FFTW3F_INCLUDE_DIR "${_sys_fftw3f_inc}")
+        set(FFTW3F_LIBRARY     "${_sys_fftw3f_lib}")
+        message(STATUS "FFT: system libfftw3f (preferred over MKL wrapper)")
+        message(STATUS "  headers : ${_sys_fftw3f_inc}")
+        message(STATUS "  runtime : ${_sys_fftw3f_lib}")
+    else()
+        # System libfftw3f not found — fall back to MKL's FFTW3 compat layer.
+        # Note: MKL's wrapper does not support l > 1 howmany dims in the guru64
+        # interface, so BART FFT commands may produce wrong output on arrays with
+        # more than one transform dimension batched over many trailing unit dims.
+        # Install libfftw3-dev to fix this:  apt-get install libfftw3-dev
+        set(FFTW3F_INCLUDE_DIR "${_mkl_include_dir}/fftw")
+        set(FFTW3F_LIBRARY     "${_mkl_rt_lib}")
+        message(STATUS "FFT: MKL FFTW3 compat (system libfftw3f not found)")
+        message(STATUS "  Install libfftw3-dev for correct multi-dim FFT support")
+    endif()
+else()
+    # MKL is required for CBLAS.  It is co-installed with torch in any standard
+    # Python environment.  If this error fires, ensure mkl-include is installed:
     #   pip install mkl mkl-include
     message(FATAL_ERROR
         "MKL not found in any Python root (searched: ${_py_roots}).\n"
@@ -495,13 +520,16 @@ target_include_directories(bart_static PUBLIC
 )
 target_compile_options(bart_static PRIVATE -fPIC -O2 -std=gnu11)
 
-# Link order: PyTorch (tensor ops) → MKL or system CBLAS+FFTW3.
-# When MKL path is active, CBLAS_LIBRARY and FFTW3F_LIBRARY both point to
-# libmkl_rt.so — a single lib that covers both BLAS and FFT.
+# Link order: FFTW3F must come BEFORE CBLAS (MKL) so that fftwf_* symbols are
+# resolved from the real libfftw3f rather than MKL's FFTW3 compat wrapper.
+# MKL's wrapper does not support l > 1 howmany dims in fftwf_plan_guru64_dft,
+# which breaks BART's FFT for DIMS=16 arrays (l = D - k = 15).
+# When FFTW3F_LIBRARY == CBLAS_LIBRARY (MKL-only fallback), the duplicate
+# is harmless — CMake deduplicates identical consecutive entries.
 target_link_libraries(bart_static PUBLIC
     ${TORCH_LIBRARIES}
-    ${CBLAS_LIBRARY}
     ${FFTW3F_LIBRARY}
+    ${CBLAS_LIBRARY}
 )
 
 if(USE_CUDA)

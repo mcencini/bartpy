@@ -33,7 +33,7 @@ jobs:
           cache: pip
 
       - name: Install system dependencies
-        run: sudo apt-get install -y cmake
+        run: sudo apt-get install -y cmake libfftw3-dev
 
       - name: Install Python build dependencies
         # Using --no-build-isolation means pip will NOT auto-install

@@ -1455,7 +1455,6 @@ def var(
     )
 
 
-@bart_op
 def wavelet(
     input_: torch.Tensor,
     axes: int | tuple[int, ...] | list[int],
@@ -1487,14 +1486,22 @@ def wavelet(
         # Adjoint wavelet: BART CLI = ``wavelet -a flags d1 d2 … input output``
         # The image dims (C-order output_dims reversed to BART Fortran order)
         # must follow the bitmask as positional scalar args.
-        pos: list[int] = [bitmask, *reversed(output_dims)]
-    else:
-        pos = [bitmask]
-    return dispatch(
-        "wavelet",
-        [input_],
-        output_dims,
-        _pos=pos,
+        # Call dispatch directly (not _generated.wavelet) so we can pass the
+        # extra dimension positional args. The C++ layer handles normalization.
+        return dispatch(
+            "wavelet",
+            [input_],
+            output_dims,
+            _pos=[bitmask, *reversed(output_dims)],
+            a=True,
+            **extra_flags,
+        )
+    # Forward path: delegate to the @bart_op-decorated generated wrapper
+    # (same behaviour as the pre-fix override).
+    return _generated.wavelet(
+        input_,
+        bitmask,
+        output_dims=output_dims,
         a=a or None,
         **extra_flags,
     )

@@ -112,8 +112,11 @@ def test_es_rolloff_monotone():
 def test_adjointness_2d():
     """Adjointness of NUFFT forward/adjoint for a 2-D radial trajectory.
 
-    Checks: |⟨A·n1, n2⟩ − ⟨n1, A^H·n2⟩| / ‖s2‖ < tol
+    Checks: |⟨A·n1, n2⟩ − ⟨n1, A^H·n2⟩| / |⟨A·n1, n2⟩| < tol
     where k = A·n1 (forward), x = A^H·n2 (adjoint).
+
+    Inner products are computed in Python (avoiding bt.fmac shape/bitmask
+    sensitivity) so the test isolates the NUFFT forward/adjoint operators.
     """
     import torch
 
@@ -124,14 +127,15 @@ def test_adjointness_2d():
     n1 = bt.noise(torch.zeros(1, 64, 64, dtype=torch.complex64), s=123)
     n2 = bt.noise(torch.zeros(64, 64, 1, dtype=torch.complex64), s=321)
 
-    k = bt.nufft(traj, n1)
-    x = bt.nufft(traj, n2, adjoint=True)
+    k = bt.nufft(traj, n1)  # A·n1: image (1,64,64) → k-space (64,64,1)
+    x = bt.nufft(traj, n2, adjoint=True)  # A^H·n2: k-space (64,64,1) → image (1,64,64)
 
-    s1 = bt.fmac(n1, x, C=True, s=7)
-    s2 = bt.fmac(k, n2, C=True, s=7)
-    diff = (s1 - s2).abs().norm().item()
-    ref = s2.abs().norm().item()
-    err = diff / ref if ref != 0.0 else diff
+    # ⟨k, n2⟩ = sum(conj(k) * n2)
+    lhs = (k.conj() * n2).sum()
+    # ⟨n1, x⟩ = sum(conj(n1) * x)
+    rhs = (n1.conj() * x).sum()
+    ref = abs(lhs).item()
+    err = abs(lhs - rhs).item() / ref if ref != 0.0 else abs(lhs - rhs).item()
     assert err < 1e-4, f"Adjointness error {err:.2e} exceeds 1e-4"
 
 
@@ -147,12 +151,13 @@ def test_adjointness_3d():
     n1 = bt.noise(torch.zeros(1, 16, 16, dtype=torch.complex64), s=123)
     n2 = bt.noise(torch.zeros(16, 16, 1, dtype=torch.complex64), s=321)
 
-    k = bt.nufft(traj, n1)
-    x = bt.nufft(traj, n2, adjoint=True)
+    k = bt.nufft(traj, n1)  # A·n1: image (1,16,16) → k-space (16,16,1)
+    x = bt.nufft(traj, n2, adjoint=True)  # A^H·n2: k-space (16,16,1) → image (1,16,16)
 
-    s1 = bt.fmac(n1, x, C=True, s=7)
-    s2 = bt.fmac(k, n2, C=True, s=7)
-    diff = (s1 - s2).abs().norm().item()
-    ref = s2.abs().norm().item()
-    err = diff / ref if ref != 0.0 else diff
+    # ⟨k, n2⟩ = sum(conj(k) * n2)
+    lhs = (k.conj() * n2).sum()
+    # ⟨n1, x⟩ = sum(conj(n1) * x)
+    rhs = (n1.conj() * x).sum()
+    ref = abs(lhs).item()
+    err = abs(lhs - rhs).item() / ref if ref != 0.0 else abs(lhs - rhs).item()
     assert err < 1e-4, f"Adjointness error {err:.2e} exceeds 1e-4"

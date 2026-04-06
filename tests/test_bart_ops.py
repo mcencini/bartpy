@@ -434,54 +434,57 @@ def test_pics_pi_reconstruction():
 # ---------------------------------------------------------------------------
 
 
-def test_nufft_forward_shape():
+def test_nufft_forward_vs_fft():
     """
-    bart/tests/nufft.mk — test-nufft-forward (shape/content smoke test).
+    bart/tests/nufft.mk — test-nufft-forward.
 
-    NUFFT forward on a radial trajectory produces a non-trivial complex64
-    output tensor.  Adjointness is validated in test_nufft_adjoint.
+    NUFFT with partition-of-unity (-P) on a Cartesian trajectory must match
+    the unitary FFT to within 0.1 %.
+
+    BART: ``traj -x32 -y32 traj``
+          ``nufft -P traj shepplogan ksp``
+          ``fft -u 3 shepplogan ksp_fft``
+          nrmse < 0.001
     """
-    traj = bt.traj(r=True, x=32, y=32)
     img = bt.phantom([32, 32])
-    ksp = bt.nufft(traj, img)
-    assert isinstance(ksp, torch.Tensor)
-    assert ksp.dtype == torch.complex64
-    assert ksp.numel() > 0
-    assert ksp.abs().max().item() > 0.0, "nufft forward produced all-zeros"
+    ksp_fft = bt.fft(img, axes=(-1, -2), unitary=True)
+    traj = bt.traj(x=32, y=32)
+    ksp_nufft = bt.nufft(traj, img, P=True)
+    # ksp_nufft has C-order shape (32, 32, 1); reshape → (1, 32, 32) then squeeze
+    ksp_2d = bt.reshape(ksp_nufft, 7, output_dims=[1, 32, 32]).squeeze()
+    err = _nrmse(ksp_2d, ksp_fft)
+    assert err < 1e-3, f"nufft -P vs fft nrmse={err:.2e}"
 
 
 def test_nufft_adjoint():
     """
     bart/tests/nufft.mk — test-nufft-adjoint.
 
-    Inner-product adjointness: ‖Ax‖² = ⟨x, A^H Ax⟩ up to 1 % relative error.
+    Inner-product adjointness: ⟨Ax, y⟩ = ⟨x, A^H y⟩ up to 1 % relative
+    error, using a small radial trajectory.
 
-    Uses a small radial trajectory to keep the test fast.  Adjointness is
-    independent of NUFFT normalisation, so this test does not depend on
-    FINUFFT's exact scaling.
+    BART: ``traj -r -x32 -y32 traj``
+          ``nufft traj x k``      (forward: image → k-space)
+          ``nufft -a traj y x2``  (adjoint: k-space → image)
+          |⟨k, y⟩ − ⟨x, x2⟩| / |⟨k, y⟩| < 0.01
     """
     traj = bt.traj(r=True, x=32, y=32)
-    img = bt.phantom([32, 32])
-    ksp = bt.nufft(traj, img)  # A: image → k-space
-    back = bt.nufft(traj, ksp, adjoint=True)  # A^H: k-space → image
-
-    # ‖Ax‖² (computed in k-space)
-    lhs = ksp.abs().pow(2).sum().real.item()
-    # ⟨x, A^H Ax⟩ (computed in image space; squeeze trailing size-1 dims)
-    back_sq = back.squeeze()
-    img_sq = img.squeeze()
-    if back_sq.shape != img_sq.shape:
-        # BART's nufft adjoint may add a trailing size-1 dimension (coil dim)
-        # that .squeeze() doesn't fully remove relative to a plain 2-D image.
-        # Use the minimum element count so the inner product is well-defined.
-        n = min(img_sq.numel(), back_sq.numel())
-        rhs = (img_sq.reshape(-1)[:n].conj() * back_sq.reshape(-1)[:n]).sum().real.item()
-    else:
-        rhs = (img_sq.conj() * back_sq).sum().real.item()
-
-    scale = max(abs(lhs), 1e-10)
-    err = abs(lhs - rhs) / scale
-    assert err < 0.01, f"nufft adjointness err={err:.2e} (‖Ax‖²={lhs:.4e}, ⟨x,A^Hx⟩={rhs:.4e})"
+    # x: random image in C-order (1, 32, 32) — bt.zeros + bt.noise
+    x = bt.noise(bt.zeros(3, output_dims=[1, 32, 32]), s=123)
+    # y: random k-space in C-order (32, 32, 1) — reshape then noise
+    y = bt.noise(
+        bt.reshape(bt.zeros(3, output_dims=[1, 32, 32]), 7, output_dims=[32, 32, 1]),
+        s=456,
+    )
+    k = bt.nufft(traj, x)  # A x: image → k-space, shape (32, 32, 1)
+    x2 = bt.nufft(traj, y, adjoint=True)  # A^H y: k-space → image, shape (1, 32, 32)
+    # ⟨k, y⟩ = sum(conj(k) * y)
+    lhs = (k.conj() * y).sum()
+    # ⟨x, x2⟩ = sum(conj(x) * x2)
+    rhs = (x.conj() * x2).sum()
+    scale = max(abs(lhs).item(), 1e-10)
+    err = abs(lhs - rhs).item() / scale
+    assert err < 0.01, f"nufft adjointness err={err:.2e} (lhs={lhs:.4e}, rhs={rhs:.4e})"
 
 
 # ---------------------------------------------------------------------------

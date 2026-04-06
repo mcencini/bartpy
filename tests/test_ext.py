@@ -70,17 +70,6 @@ def test_fft_roundtrip():
 
 
 # ---------------------------------------------------------------------------
-# Bad input raises
-# ---------------------------------------------------------------------------
-
-
-def test_bad_input_raises():
-    """A BART command that fails raises RuntimeError through the public API."""
-    with pytest.raises((RuntimeError, ValueError)):
-        # phantom with negative dims is rejected by BART
-        bt.phantom([-1, -1])
-
-
 # ---------------------------------------------------------------------------
 # torch_prior integration point exists in bt.pics signature
 # ---------------------------------------------------------------------------

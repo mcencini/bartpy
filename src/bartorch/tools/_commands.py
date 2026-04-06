@@ -1455,6 +1455,7 @@ def var(
     )
 
 
+@bart_op
 def wavelet(
     input_: torch.Tensor,
     axes: int | tuple[int, ...] | list[int],
@@ -1473,15 +1474,27 @@ def wavelet(
         C-order axis index or indices.  Negative values are supported.
     output_dims : list[int], optional
         Expected output shape (C-order).  ``None`` → inferred at runtime.
+        **Required when** ``a=True``: BART adjoint wavelet needs the original
+        image dimensions as positional CLI args
+        (``wavelet -a flags d1 d2 … input output``).
     a : bool, optional
         Adjoint / inverse transform (``-a``).  Default ``False``.
     **extra_flags :
         Additional BART ``wavelet`` flags forwarded directly.
     """
-    return _generated.wavelet(
-        input_,
-        _axes_to_flags(axes, ndim=input_.ndim),
-        output_dims=output_dims,
+    bitmask = _axes_to_flags(axes, ndim=input_.ndim)
+    if a and output_dims is not None:
+        # Adjoint wavelet: BART CLI = ``wavelet -a flags d1 d2 … input output``
+        # The image dims (C-order output_dims reversed to BART Fortran order)
+        # must follow the bitmask as positional scalar args.
+        pos: list[Any] = [bitmask, *reversed(output_dims)]
+    else:
+        pos = [bitmask]
+    return dispatch(
+        "wavelet",
+        [input_],
+        output_dims,
+        _pos=pos,
         a=a or None,
         **extra_flags,
     )

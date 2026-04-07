@@ -264,20 +264,14 @@ static py::object run(
 
     for (size_t i = 0; i < (size_t)py_inputs.size(); ++i) {
         torch::Tensor t = py_inputs[i].cast<torch::Tensor>();
-        // Ensure complex64 and C-contiguous (no-op when already correct).
-        t = t.to(torch::kComplexFloat).contiguous();
-
-        // Detect aliased inputs: two tensors sharing the same data_ptr confuse
-        // BART's memcfl ref-counting.  memcfl_unmap searches by data pointer,
-        // so the same pointer would be decremented twice for a single entry,
-        // causing a refcount underflow and a process crash.  Clone to give each
-        // registration its own unique backing buffer.
-        for (size_t j = 0; j < inputs.size(); ++j) {
-            if (inputs[j].data_ptr() == t.data_ptr()) {
-                t = t.clone();
-                break;
-            }
-        }
+        // Ensure complex64 and C-contiguous, then always clone.
+        // Cloning is required because some BART commands (e.g. pocsense)
+        // modify their input buffers in-place (scaling, normalisation).
+        // Without a private copy the original Python tensor would be silently
+        // corrupted, producing wrong results in subsequent computations.
+        // Cloning here also prevents aliased-input refcount underflows in
+        // memcfl_unmap (previously handled by the per-pair clone below).
+        t = t.to(torch::kComplexFloat).contiguous().clone();
 
         inputs.push_back(t);
 

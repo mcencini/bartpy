@@ -110,10 +110,15 @@ def phantom(
     >>> ph = bt.phantom([256, 256])                          # 2-D Shepp-Logan
     >>> ksp = bt.phantom([256, 256], kspace=True, ncoils=8)  # 8-coil k-space
     """
+    # BART phantom's -x n flag sets all spatial dimensions to n.
+    # Without it BART defaults to 128.  Derive from dims unless the caller
+    # already passed x= explicitly via extra_flags.
+    x_val = extra_flags.pop("x", dims[-1] if dims else None)
     return _generated.phantom(
         output_dims=dims,
         k=kspace or None,
         s=ncoils,
+        x=x_val,
         **extra_flags,
     )
 
@@ -974,6 +979,106 @@ def nufft(
 
 
 # ---------------------------------------------------------------------------
+# reshape — pass per-dimension sizes as positional BART args
+#
+# BART CLI: ``bart reshape flags d1 d2 ... dN input output``
+# The generated wrapper only passes ``flags``; the new sizes per selected
+# dimension must follow as positional args.  Sizes are derived from
+# ``output_dims`` (C-order) and reversed to BART Fortran order.
+# ---------------------------------------------------------------------------
+
+
+def reshape(
+    input_: torch.Tensor,
+    flags: int,
+    *,
+    output_dims: list[int] | None = None,
+    **extra_flags: Any,
+) -> torch.Tensor:
+    """Reshape selected dimensions.
+
+    Parameters
+    ----------
+    input_ : torch.Tensor
+        Input array.
+    flags : int
+        Bitmask selecting the dimensions to reshape.
+    output_dims : list[int]
+        New shape in C-order.  The sizes are automatically reversed to Fortran
+        order when passed to BART so that the number of positional size
+        arguments matches the number of bits set in ``flags``.
+    **extra_flags :
+        Additional BART ``reshape`` flags forwarded directly.
+    """
+    if output_dims is not None:
+        pos: list[Any] = [flags, *reversed(output_dims)]
+    else:
+        pos = [flags]
+    return dispatch("reshape", [input_], output_dims, _pos=pos, **extra_flags)
+
+
+# ---------------------------------------------------------------------------
+# ones / zeros — pass dimension sizes as positional BART args
+#
+# BART CLI: ``bart ones D d1 d2 ... dD output``
+#                        ``bart zeros D d1 d2 ... dD output``
+# The generated wrappers only pass ``D``; the per-dimension sizes are
+# derived from ``output_dims`` (C-order) and forwarded in reversed (Fortran)
+# order so BART produces the expected shape.
+# ---------------------------------------------------------------------------
+
+
+def ones(
+    dims: int,
+    *,
+    output_dims: list[int] | None = None,
+    **extra_flags: Any,
+) -> torch.Tensor:
+    """Create an array filled with ones.
+
+    Parameters
+    ----------
+    dims : int
+        Number of dimensions (``D`` in BART ``ones D d1…dD``).
+    output_dims : list[int]
+        Shape of the output array in C-order.  The sizes are automatically
+        converted to Fortran order when passed to BART.
+    **extra_flags :
+        Additional BART ``ones`` flags forwarded directly.
+    """
+    if output_dims is not None:
+        pos: list[Any] = [dims, *reversed(output_dims)]
+    else:
+        pos = [dims]
+    return dispatch("ones", [], output_dims, _pos=pos, **extra_flags)
+
+
+def zeros(
+    dims: int,
+    *,
+    output_dims: list[int] | None = None,
+    **extra_flags: Any,
+) -> torch.Tensor:
+    """Create a zero-filled array.
+
+    Parameters
+    ----------
+    dims : int
+        Number of dimensions (``D`` in BART ``zeros D d1…dD``).
+    output_dims : list[int]
+        Shape of the output array in C-order.  The sizes are automatically
+        converted to Fortran order when passed to BART.
+    **extra_flags :
+        Additional BART ``zeros`` flags forwarded directly.
+    """
+    if output_dims is not None:
+        pos: list[Any] = [dims, *reversed(output_dims)]
+    else:
+        pos = [dims]
+    return dispatch("zeros", [], output_dims, _pos=pos, **extra_flags)
+
+
+# ---------------------------------------------------------------------------
 # Bitmask → axes overrides
 #
 # Every BART command whose first positional scalar argument is a bitmask
@@ -1368,14 +1473,40 @@ def wavelet(
         C-order axis index or indices.  Negative values are supported.
     output_dims : list[int], optional
         Expected output shape (C-order).  ``None`` → inferred at runtime.
+        **Required when** ``a=True``: BART adjoint wavelet needs the original
+        image dimensions as positional CLI args
+        (``wavelet -a flags d1 d2 … input output``).
     a : bool, optional
         Adjoint / inverse transform (``-a``).  Default ``False``.
     **extra_flags :
         Additional BART ``wavelet`` flags forwarded directly.
     """
+    if a and output_dims is not None:
+        # Adjoint wavelet: BART CLI = ``wavelet -a flags d1 d2 … input output``
+        # BART's forward wavelet collapses all flagged spatial dims into a single
+        # 1D coefficient array (wavelet_coeffs2 sets odims[first_bit] = total,
+        # odims[other_bits] = 1).  Therefore input_.ndim == 1 here, and using it
+        # to compute the bitmask would raise "axis -2 out of range for ndim=1".
+        # Use len(output_dims) instead — the output (reconstructed image) ndim.
+        bitmask = _axes_to_flags(axes, ndim=len(output_dims))
+        # The image dims (C-order output_dims reversed to BART Fortran order)
+        # must follow the bitmask as positional scalar args.
+        # Call dispatch directly (not _generated.wavelet) so we can pass the
+        # extra dimension positional args. The C++ layer handles normalization.
+        return dispatch(
+            "wavelet",
+            [input_],
+            output_dims,
+            _pos=[bitmask, *reversed(output_dims)],
+            a=True,
+            **extra_flags,
+        )
+    # Forward path: bitmask from input shape.
+    bitmask = _axes_to_flags(axes, ndim=input_.ndim)
+    # Delegate to the @bart_op-decorated generated wrapper.
     return _generated.wavelet(
         input_,
-        _axes_to_flags(axes, ndim=input_.ndim),
+        bitmask,
         output_dims=output_dims,
         a=a or None,
         **extra_flags,

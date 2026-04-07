@@ -128,6 +128,38 @@ print(';'.join(dirs))
     endif()
 
     find_package(CUDAToolkit REQUIRED)
+
+    # Auto-detect CUDA architecture when not specified by the user.
+    # We first try nvidia-smi; if absent (build machine ≠ run machine) we fall
+    # back to "native" (NVCC autodetects at build time from the local GPU) and
+    # finally to sm_75 (Turing — safe for T4, RTX 20xx, A100, H100 all support it).
+    if(NOT DEFINED CMAKE_CUDA_ARCHITECTURES OR CMAKE_CUDA_ARCHITECTURES STREQUAL "")
+        find_program(_NVCC_EXEC NAMES nvcc)
+        find_program(_NSMI_EXEC NAMES nvidia-smi)
+        if(_NSMI_EXEC)
+            execute_process(
+                COMMAND "${_NSMI_EXEC}" --query-gpu=compute_cap --format=csv,noheader
+                OUTPUT_VARIABLE _smi_caps
+                OUTPUT_STRIP_TRAILING_WHITESPACE
+                ERROR_QUIET
+            )
+            if(_smi_caps)
+                string(REPLACE "." "" _smi_arch "${_smi_caps}")
+                string(STRIP "${_smi_arch}" _smi_arch)
+                set(CMAKE_CUDA_ARCHITECTURES "${_smi_arch}" CACHE STRING "CUDA architecture" FORCE)
+                message(STATUS "CUDA: detected architecture ${_smi_arch} from nvidia-smi")
+            else()
+                set(CMAKE_CUDA_ARCHITECTURES "native" CACHE STRING "CUDA architecture" FORCE)
+                message(STATUS "CUDA: using 'native' architecture (nvidia-smi gave no output)")
+            endif()
+        elseif(_NVCC_EXEC)
+            set(CMAKE_CUDA_ARCHITECTURES "native" CACHE STRING "CUDA architecture" FORCE)
+            message(STATUS "CUDA: using 'native' architecture (nvidia-smi not found)")
+        else()
+            set(CMAKE_CUDA_ARCHITECTURES "75" CACHE STRING "CUDA architecture" FORCE)
+            message(STATUS "CUDA: defaulting to sm_75 (no nvidia-smi or nvcc found)")
+        endif()
+    endif()
 endif()
 
 # ---------------------------------------------------------------------------
@@ -290,7 +322,16 @@ if(BARTORCH_USE_FINUFFT)
     set(FINUFFT_BUILD_DEVEL    OFF CACHE BOOL "" FORCE)
     set(FINUFFT_ENABLE_INSTALL OFF CACHE BOOL "" FORCE)
     set(FINUFFT_USE_CPU    ON  CACHE BOOL "" FORCE)
-    set(FINUFFT_USE_CUDA   OFF CACHE BOOL "" FORCE)   # cuFINUFFT handled separately
+    # cuFINUFFT: build when USE_CUDA is ON.  cuFINUFFT uses its own FFTW-free
+    # cuFFT backend (no FFTW3 dependency on the GPU path), and CCCL (Thrust/CUB)
+    # is fetched automatically via CPM inside FINUFFT's cuda_setup.cmake.
+    if(USE_CUDA)
+        set(FINUFFT_USE_CUDA   ON  CACHE BOOL "" FORCE)
+        list(APPEND BART_DEFS BARTORCH_USE_CUFINUFFT)
+        message(STATUS "cuFINUFFT: enabled (cuFINUFFT GPU gridder shim active)")
+    else()
+        set(FINUFFT_USE_CUDA   OFF CACHE BOOL "" FORCE)
+    endif()
     set(FINUFFT_STATIC_LINKING ON  CACHE BOOL "" FORCE)
     set(FINUFFT_USE_DUCC0  OFF CACHE BOOL "" FORCE)   # use FFTW backend, not DUCC0
     set(FINUFFT_USE_OPENMP ON  CACHE BOOL "" FORCE)   # multi-threaded spreading
@@ -458,6 +499,20 @@ file(GLOB _bart_stl_srcs     "${BART_SRC_DIR}/stl/*.c")
 # as well as the main dispatcher (bart.c) and entry-point wrapper (main.c).
 file(GLOB _bart_tools_srcs   "${BART_SRC_DIR}/*.c")
 
+# CUDA device-code sources — only included when USE_CUDA=ON.
+# These .cu files are compiled to PTX/SASS device code by nvcc.
+# BART guards them with #ifdef USE_CUDA so they compile cleanly when
+# the definition is set.
+if(USE_CUDA)
+    file(GLOB _bart_num_cu_srcs      "${BART_SRC_DIR}/num/*.cu")
+    file(GLOB _bart_wavelet_cu_srcs  "${BART_SRC_DIR}/wavelet/*.cu")
+    file(GLOB _bart_noncart_cu_srcs  "${BART_SRC_DIR}/noncart/*.cu")
+else()
+    set(_bart_num_cu_srcs "")
+    set(_bart_wavelet_cu_srcs "")
+    set(_bart_noncart_cu_srcs "")
+endif()
+
 # Exclude files that require external optional libraries without #ifdef guards:
 #
 # ismrmrd.c       — includes ismrm/read.h → ismrmrd/ismrmrd.h (libismrmrd).
@@ -473,12 +528,15 @@ list(REMOVE_ITEM _bart_tools_srcs "${BART_SRC_DIR}/ismrmrd.c")
 set(BART_SOURCES
     ${_bart_misc_srcs}
     ${_bart_num_srcs}
+    ${_bart_num_cu_srcs}
     ${_bart_simu_srcs}
     ${_bart_linops_srcs}
     ${_bart_wavelet_srcs}
+    ${_bart_wavelet_cu_srcs}
     ${_bart_iter_srcs}
     ${_bart_nlops_srcs}
     ${_bart_noncart_srcs}
+    ${_bart_noncart_cu_srcs}
     ${_bart_calib_srcs}
     ${_bart_grecon_srcs}
     ${_bart_lowrank_srcs}
@@ -506,7 +564,11 @@ target_include_directories(bart_static PUBLIC
     ${FFTW3F_INCLUDE_DIR}
     ${CBLAS_INCLUDE_DIR}
 )
-target_compile_options(bart_static PRIVATE -fPIC -O2 -std=gnu11)
+target_compile_options(bart_static PRIVATE
+    $<$<COMPILE_LANGUAGE:C>:-fPIC -O2 -std=gnu11>
+    $<$<COMPILE_LANGUAGE:CXX>:-fPIC -O2>
+    $<$<COMPILE_LANGUAGE:CUDA>:-O2 --generate-code arch=compute_${CMAKE_CUDA_ARCHITECTURES},code=sm_${CMAKE_CUDA_ARCHITECTURES}>
+)
 
 # Link order: PyTorch → MKL (covers both CBLAS and the fftwf_* symbols that
 # mkl_fftw_shim.c intercepts).  FFTW3F_LIBRARY == CBLAS_LIBRARY == libmkl_rt.
@@ -517,7 +579,14 @@ target_link_libraries(bart_static PUBLIC
 )
 
 if(USE_CUDA)
-    target_link_libraries(bart_static PUBLIC CUDA::cufft CUDA::cudart CUDA::cublas)
+    target_include_directories(bart_static PUBLIC
+        ${CUDAToolkit_INCLUDE_DIRS}
+    )
+    target_link_libraries(bart_static PUBLIC
+        CUDA::cufft CUDA::cudart CUDA::cublas CUDA::cusolver)
+    set_target_properties(bart_static PROPERTIES
+        CUDA_SEPARABLE_COMPILATION ON
+    )
 endif()
 
 # ---------------------------------------------------------------------------
@@ -626,6 +695,23 @@ if(BARTORCH_USE_FINUFFT)
         )
     endif()
     message(STATUS "FINUFFT grid replacement: --wrap,grid2 --wrap,grid2H --wrap,rolloff_correction --wrap,apply_rolloff_correction --wrap,apply_rolloff_correction2 active")
+
+    # ── cuFINUFFT GPU gridder shim ─────────────────────────────────────────
+    # When both FINUFFT and USE_CUDA are active, also compile the GPU gridder
+    # shim that wraps cuda_grid/cuda_gridH/cuda_apply_rolloff_correction2 using
+    # cuFINUFFT's type-1/2 spread-only kernels.
+    if(USE_CUDA)
+        target_sources(_bartorch_ext PRIVATE cuda/cufinufft_grid.cu)
+        target_link_libraries(_bartorch_ext PRIVATE cufinufft)
+        target_compile_definitions(_bartorch_ext PRIVATE BARTORCH_USE_CUFINUFFT)
+
+        target_link_options(_bartorch_ext PRIVATE
+            -Wl,--wrap,cuda_grid
+            -Wl,--wrap,cuda_gridH
+            -Wl,--wrap,cuda_apply_rolloff_correction2
+        )
+        message(STATUS "cuFINUFFT GPU gridder: --wrap,cuda_grid --wrap,cuda_gridH --wrap,cuda_apply_rolloff_correction2 active")
+    endif()
 endif()
 
 # ---------------------------------------------------------------------------
@@ -656,8 +742,23 @@ endif()
 message(STATUS "Torch prior: --wrap,nlop_tf_create active")
 
 if(USE_CUDA)
-    target_sources(_bartorch_ext PRIVATE cuda/cuda_bridge.hpp)
+    target_sources(_bartorch_ext PRIVATE
+        cuda/cuda_bridge.hpp
+        cuda/bartorch_cuda_dispatch.cpp
+    )
     target_compile_definitions(_bartorch_ext PRIVATE USE_CUDA)
+    target_include_directories(_bartorch_ext PRIVATE
+        ${CUDAToolkit_INCLUDE_DIRS}
+    )
+    target_link_libraries(_bartorch_ext PRIVATE
+        CUDA::cudart CUDA::cufft CUDA::cublas CUDA::cusolver)
+
+    # --wrap,memcfl_create: GPU dispatch mode intercepts CFL output allocation
+    # (cuda/bartorch_cuda_dispatch.cpp provides __wrap_memcfl_create).
+    target_link_options(_bartorch_ext PRIVATE
+        -Wl,--wrap,memcfl_create
+    )
+    message(STATUS "CUDA dispatch: --wrap,memcfl_create active")
 endif()
 
 # Ensure the .so lands directly in the bartorch package directory so that

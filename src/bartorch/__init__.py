@@ -53,4 +53,6 @@ except PackageNotFoundError:
 
 __all__ = [
     "__version__",
+    "lib",
+    "interop",
 ]

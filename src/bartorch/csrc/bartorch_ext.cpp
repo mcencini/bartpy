@@ -71,6 +71,19 @@ void bartorch_register_torch_prior(const std::string& name,
                                    std::vector<long>  dims);
 void bartorch_unregister_torch_prior(const std::string& name);
 
+// lib_ops.cpp registration function.
+void init_lib_ops(py::module_& m);
+
+// FINUFFT plan-cache flush — implemented in finufft_grid.cpp and
+// cuda/cufinufft_grid.cu.  Called after each bart_command() run to prevent
+// ABA reuse of CLI-allocated CFL trajectory pointers across commands.
+#ifdef BARTORCH_USE_FINUFFT
+extern "C" void bartorch_finufft_flush_all();
+#endif
+#ifdef BARTORCH_USE_CUFINUFFT
+extern "C" void bartorch_cufinufft_flush_all();
+#endif
+
 #ifdef USE_CUDA
 #include <cuda_runtime.h>
 #include "cuda/cuda_bridge.hpp"
@@ -402,6 +415,19 @@ static py::object run(
         bartorch_disable_gpu_dispatch();
 #endif
 
+    // ── 3b. Flush NUFFT plan caches for CLI commands ───────────────────────
+    // Plans are keyed by trajectory device pointer.  For CLI commands, the
+    // trajectory lives in a temporary CFL buffer that will be freed in step 4.
+    // Flushing now prevents ABA pointer reuse on the next bart_command() call.
+    // (For encoding_op / BartLinopHandle, the trajectory lives longer and is
+    // invalidated per-traj in BartLinopHandle::~BartLinopHandle() instead.)
+#ifdef BARTORCH_USE_FINUFFT
+    bartorch_finufft_flush_all();
+#endif
+#ifdef BARTORCH_USE_CUFINUFFT
+    bartorch_cufinufft_flush_all();
+#endif
+
     // ── 4. Clean up input registrations ───────────────────────────────────
     // After a successful bart_command() call:
     //   - Each input was loaded by the tool (refcount: 1 → 2) then unmapped
@@ -560,4 +586,7 @@ PYBIND11_MODULE(_bartorch_ext, m) {
           &bartorch_unregister_torch_prior,
           py::arg("name"),
           "Remove a previously registered torch prior from the registry.");
+
+    // Library operator bindings (BartLinopHandle, create_encoding_op, …)
+    init_lib_ops(m);
 }

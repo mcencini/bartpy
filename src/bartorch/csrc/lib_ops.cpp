@@ -98,11 +98,11 @@ static void c_to_bart_dims(const std::vector<int64_t> &cshape,
 static std::vector<int64_t> bart_to_c_shape(const long bart_dims[BART_DIMS],
                                              int min_ndim = 1)
 {
-    int nd = BART_DIMS;
-    while (nd > min_ndim && bart_dims[nd - 1] == 1) --nd;
-    std::vector<int64_t> shape(nd);
-    for (int j = 0; j < nd; ++j)
-        shape[j] = (int64_t)bart_dims[nd - 1 - j];
+    int ndim_ = BART_DIMS;
+    while (ndim_ > min_ndim && bart_dims[ndim_ - 1] == 1) --ndim_;
+    std::vector<int64_t> shape(ndim_);
+    for (int j = 0; j < ndim_; ++j)
+        shape[j] = (int64_t)bart_dims[ndim_ - 1 - j];
     return shape;
 }
 
@@ -299,12 +299,25 @@ static py::object create_encoding_op(
     long traj_dims[BART_DIMS] = {1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1};
     long bas_dims [BART_DIMS] = {1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1};
 
-    bool has_pattern = !pattern_py.is_none();
-    bool has_traj    = !traj_py.is_none();
-    bool has_basis   = !basis_py.is_none();
+    bool has_traj  = !traj_py.is_none();
+    bool has_basis = !basis_py.is_none();
 
-    if (has_pattern) {
+    if (!pattern_py.is_none()) {
         pattern_t = to_bart_tensor(pattern_py.cast<torch::Tensor>());
+        c_to_bart_dims(pattern_t.sizes().vec(), pat_dims);
+    } else {
+        // BART's linop_sampling_create always dereferences pat_dims, so we
+        // must pass a valid dim array and a non-NULL all-ones pattern even for
+        // full k-space (no undersampling).  Build pat_dims = ksp_dims with the
+        // coil dimension (index COIL_DIM=3) collapsed to 1, then create a
+        // matching all-ones tensor that we keep alive in the handle.
+        long pd[BART_DIMS];
+        for (int i = 0; i < BART_DIMS; ++i) pd[i] = ksp_dims[i];
+        pd[COIL_DIM] = 1;
+        auto pat_cshape = bart_to_c_shape(pd);
+        pattern_t = torch::ones(
+            torch::IntArrayRef(pat_cshape.data(), pat_cshape.size()),
+            torch::TensorOptions().dtype(torch::kComplexFloat)).clone();
         c_to_bart_dims(pattern_t.sizes().vec(), pat_dims);
     }
     if (has_traj) {
@@ -330,9 +343,9 @@ static py::object create_encoding_op(
     const struct linop_s *op = bartorch_create_encoding_op(
         img_dims, ksp_dims,
         map_dims, maps_t.data_ptr(),
-        pat_dims, has_pattern ? pattern_t.data_ptr() : nullptr,
-        traj_dims, has_traj   ? traj_t.data_ptr()    : nullptr,
-        bas_dims,  has_basis  ? basis_t.data_ptr()   : nullptr,
+        pat_dims, pattern_t.data_ptr(),   // always non-NULL (all-ones or user mask)
+        traj_dims, has_traj  ? traj_t.data_ptr()  : nullptr,
+        bas_dims,  has_basis ? basis_t.data_ptr() : nullptr,
         use_gpu);
 
     if (!op)
@@ -343,9 +356,9 @@ static py::object create_encoding_op(
     // into them for internal computations between apply calls).
     std::vector<torch::Tensor> keep;
     keep.push_back(maps_t);
-    if (has_pattern) keep.push_back(pattern_t);
-    if (has_traj)    keep.push_back(traj_t);
-    if (has_basis)   keep.push_back(basis_t);
+    keep.push_back(pattern_t);   // always kept (all-ones or user-supplied)
+    if (has_traj)  keep.push_back(traj_t);
+    if (has_basis) keep.push_back(basis_t);
 
     return py::cast(std::make_shared<BartLinopHandle>(op, std::move(keep)));
 }

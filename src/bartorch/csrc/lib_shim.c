@@ -14,13 +14,14 @@
 #include <stdbool.h>
 #include <string.h>
 
-#include "misc/mri.h"     /* DIMS, COIL_DIM, MAPS_DIM, COEFF_DIM */
-#include "num/iovec.h"    /* iovec_s, linop_domain/codomain */
-#include "num/init.h"     /* num_init */
-#include "linops/linop.h" /* linop_s, linop_*_unchecked, linop_free */
-#include "grecon/model.h" /* pics_model, pics_config */
-#include "iter/iter.h"    /* iter_conjgrad, iter_conjgrad_defaults, iter_conf */
-#include "iter/lsqr.h"    /* lsqr, lsqr_conf, lsqr_defaults */
+#include "misc/mri.h"       /* DIMS, COIL_DIM, MAPS_DIM, COEFF_DIM */
+#include "num/iovec.h"      /* iovec_s, linop_domain/codomain */
+#include "num/init.h"       /* num_init */
+#include "linops/linop.h"   /* linop_s, linop_*_unchecked, linop_free */
+#include "grecon/model.h"   /* pics_model, pics_config */
+#include "noncart/nufft.h"  /* nufft_conf_s, nufft_conf_defaults */
+#include "iter/iter.h"      /* iter_conjgrad, iter_conjgrad_defaults, iter_conf */
+#include "iter/lsqr.h"      /* lsqr, lsqr_conf, lsqr_defaults */
 
 /* ------------------------------------------------------------------
  * Shape queries
@@ -63,8 +64,8 @@ void bartorch_linop_get_codomain_dims(const struct linop_s *op, long dims[DIMS])
  * ksp_dims  : k-space dimensions (spatial/readout + coils)
  * map_dims  : sensitivity map dimensions (spatial + coils + ESPIRiT maps)
  * maps      : sensitivity map data (always required)
- * pat_dims  : sampling pattern dimensions (NULL → no undersampling mask)
- * pattern   : sampling mask data (NULL → full k-space / Cartesian)
+ * pat_dims  : sampling pattern dimensions (always required; use all-1s for full k-space)
+ * pattern   : sampling mask data (always required; use all-ones for full k-space)
  * traj_dims : trajectory dimensions (NULL → Cartesian reconstruction)
  * traj      : trajectory data (NULL → Cartesian)
  * bas_dims  : subspace basis dimensions (NULL → no subspace projection)
@@ -84,8 +85,12 @@ const struct linop_s *bartorch_create_encoding_op(
 {
 	num_init();
 
+	/* Use default NUFFT config for non-Cartesian; NULL is invalid for traj!=NULL. */
+	struct nufft_conf_s nuconf = nufft_conf_defaults;
+
 	struct pics_config conf = { 0 };
 	conf.gpu = (bool)use_gpu;
+	conf.nuconf = (NULL != traj) ? &nuconf : NULL;
 
 	return pics_model(&conf,
 		img_dims, ksp_dims,

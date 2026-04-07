@@ -32,10 +32,28 @@ Tools
    :undoc-members:
    :show-inheritance:
 
-Ops
----
+Library Operators
+-----------------
 
-.. automodule:: bartorch.ops.linops
+.. automodule:: bartorch.lib.linops
+   :members:
+   :undoc-members:
+   :show-inheritance:
+
+.. automodule:: bartorch.lib.encoding
+   :members:
+   :undoc-members:
+   :show-inheritance:
+
+.. automodule:: bartorch.lib.solvers
+   :members:
+   :undoc-members:
+   :show-inheritance:
+
+Interop
+-------
+
+.. automodule:: bartorch.interop._deepinv
    :members:
    :undoc-members:
    :show-inheritance:

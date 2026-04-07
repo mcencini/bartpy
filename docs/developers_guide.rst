@@ -49,7 +49,7 @@ Execution path
 
 Dispatch flow::
 
-   user calls: ops.fft(input, flags=3)
+   user calls: bt.fft(input, flags=3)
      │
      │  @bart_op decorator (on fft):
      │    • cast all tensor args to complex64  (zero-copy if already correct)
@@ -102,7 +102,7 @@ Adding New Ops
 2. **Python binding** (``bartorch/csrc/bartorch_ext.cpp``):
    Expose the function via ``pybind11``.
 
-3. **Python op module** (e.g. ``bartorch/ops/mynewop.py``):
+3. **Python op module** (e.g. ``bartorch/tools/mynewtool.py``):
 
    .. code-block:: python
 
@@ -116,9 +116,9 @@ Adding New Ops
    The ``@bart_op`` decorator handles all dtype normalisation automatically.
    Accept and return plain ``torch.Tensor``.
 
-4. **Export** from ``bartorch/ops/__init__.py``.
+4. **Export** from ``bartorch/tools/__init__.py``.
 
-5. **Tests** in ``tests/test_ops.py``.
+5. **Tests** in ``tests/test_bart_ops.py``.
 
 Testing
 -------
@@ -131,7 +131,7 @@ Run the full test suite:
 
 The unit tests (``test_tensor.py``, ``test_linops.py``, ``test_context.py``,
 ``test_cfl.py``) do not require the C++ extension and run against the Python
-stubs.  Integration tests in ``tests/test_ops.py`` require the compiled
+stubs.  Integration tests in ``tests/test_bart_ops.py`` require the compiled
 extension.
 
 Pre-commit Setup

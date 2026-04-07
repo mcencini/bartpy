@@ -64,14 +64,11 @@ Quickstart
    # 2-D FFT using C-order axis indices (no raw bitmask needed)
    kspace = bt.fft(ph, axes=(-1, -2))
 
-   # Linear operator algebra (Phase 3+)
-   # from bartorch.ops import BartLinop
-   # A = BartLinop(...)                 # BartLinop: image → k-space
-   # AH = A.H                           # adjoint
-   # AHA = A.N                          # normal operator A^H A
-   # B = 2.0 * A                        # scalar multiplication
-   # C = A @ ops.wavelet_op(A.ishape)   # operator composition
-   # y = A(x)                           # forward application
+   # Linear operator algebra
+   # import bartorch.lib as bl
+   # E = bl.encoding_op(sens)              # SENSE encoding operator
+   # EH = E.adjoint(ksp)                   # adjoint application
+   # x = E.solve(ksp, maxiter=30)          # CG reconstruction
 
 How It Works
 ------------

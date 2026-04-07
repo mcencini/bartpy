@@ -86,6 +86,8 @@ def encoding_op(
     >>> traj = bt.traj(r=True, x=64, y=64)
     >>> E    = bl.encoding_op(sens, ksp_shape=(8, 64, 64), traj=traj)
     """
+    # Deferred import: avoids loading the C++ extension at module-import time,
+    # which would fail if the extension hasn't been built yet.
     from bartorch._bartorch_ext import create_encoding_op  # noqa: PLC0415
 
     handle = create_encoding_op(

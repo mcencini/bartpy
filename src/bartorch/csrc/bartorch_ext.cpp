@@ -346,7 +346,6 @@ static py::object run(
     debug_level = saved_debug;
 
     // ── 3. Clean up input registrations ───────────────────────────────────
-    // ── 3. Clean up input registrations ───────────────────────────────────
     // After a successful bart_command() call:
     //   - Each input was loaded by the tool (refcount: 1 → 2) then unmapped
     //     (refcount: 2 → 1) by the BART tool code.

@@ -56,7 +56,8 @@ def test_encoding_op_ishape_oshape():
     E = bl.encoding_op(sens)
     # Domain (ishape): image space — spatial dims × maps, no coil.
     # BART maps Fortran (nx, ny, 1, nc, 1) → img Fortran (nx, ny, 1, 1, 1)
-    # C-order ishape: (1, ny, nx) or (ny, nx) depending on trailing 1-trim.
+    # C-order ishape is obtained by reversing and trimming trailing 1s
+    # (BART drops singleton dimensions at the end of the shape).
     assert E.ishape[-1] == _NX
     assert E.ishape[-2] == _NY
     # Codomain (oshape): k-space — spatial × coil.

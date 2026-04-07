@@ -314,23 +314,13 @@ static py::object create_encoding_op(
     if (has_basis) {
         basis_t = to_bart_tensor(basis_py.cast<torch::Tensor>());
         c_to_bart_dims(basis_t.sizes().vec(), bas_dims);
-        // Subspace: propagate ncoeff to img_dims[COEFF_DIM=6].
-        // basis C-order (ncoeff, nt) → Fortran (nt, ncoeff, 1, …)
-        // bas_dims[1] = ncoeff  (Fortran index 1 is second-fastest → C index 0)
-        // Actually after c_to_bart_dims: bas_dims[0]=nt, bas_dims[1]=ncoeff
-        // COEFF_DIM = 6 in BART.  Map basis ncoeff into the correct slot.
-        // BART convention: basis_dims[TE_DIM=5]=nt, basis_dims[COEFF_DIM=6]=ncoeff
-        // With C-order (ncoeff, nt): reversed Fortran = (nt, ncoeff)
-        //   → bas_dims[0]=nt, bas_dims[1]=ncoeff
-        // We need bas_dims[5]=nt, bas_dims[6]=ncoeff for pics_model.
-        // Re-do: BART basis layout is (1,1,1,1,1,nt,ncoeff,1,...) Fortran.
-        // C-order bartorch would be (ncoeff, nt, 1, 1, 1, 1, 1).
-        // But a 2-D (ncoeff, nt) tensor reverses to Fortran (nt, ncoeff).
-        // We need to place nt at index 5 (TE_DIM) and ncoeff at index 6 (COEFF_DIM).
-        auto bshape = basis_t.sizes().vec();  // C-order: [ncoeff, nt]
+        // BART expects the basis in Fortran layout (1,…,1,nt,ncoeff,1,…) with
+        // nt at index 5 (TE_DIM) and ncoeff at index 6 (COEFF_DIM).
+        // C-order input (ncoeff, nt) maps directly: bshape[0]=ncoeff, bshape[1]=nt.
+        auto bshape = basis_t.sizes().vec();
         if (bshape.size() >= 2) {
             for (int i = 0; i < BART_DIMS; ++i) bas_dims[i] = 1;
-            bas_dims[5] = (long)bshape[1];  // TE_DIM=5: nt
+            bas_dims[5] = (long)bshape[1];  // TE_DIM=5:    nt
             bas_dims[6] = (long)bshape[0];  // COEFF_DIM=6: ncoeff
             img_dims[6] = (long)bshape[0];  // image gains COEFF_DIM
         }

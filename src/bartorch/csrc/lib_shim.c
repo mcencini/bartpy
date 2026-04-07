@@ -29,17 +29,23 @@
 void bartorch_linop_get_domain_dims(const struct linop_s *op, long dims[DIMS])
 {
 	const struct iovec_s *iov = linop_domain(op);
+	int n = (iov->N < DIMS) ? iov->N : DIMS;
 
-	for (int i = 0; i < DIMS; i++)
-		dims[i] = (i < iov->N) ? iov->dims[i] : 1L;
+	for (int i = 0; i < n; i++)
+		dims[i] = iov->dims[i];
+	for (int i = n; i < DIMS; i++)
+		dims[i] = 1L;
 }
 
 void bartorch_linop_get_codomain_dims(const struct linop_s *op, long dims[DIMS])
 {
 	const struct iovec_s *iov = linop_codomain(op);
+	int n = (iov->N < DIMS) ? iov->N : DIMS;
 
-	for (int i = 0; i < DIMS; i++)
-		dims[i] = (i < iov->N) ? iov->dims[i] : 1L;
+	for (int i = 0; i < n; i++)
+		dims[i] = iov->dims[i];
+	for (int i = n; i < DIMS; i++)
+		dims[i] = 1L;
 }
 
 /* ------------------------------------------------------------------

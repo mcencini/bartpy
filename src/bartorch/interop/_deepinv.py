@@ -14,11 +14,12 @@ if TYPE_CHECKING:
 
 
 def _make_class() -> type:
-    """Build BartLinearPhysics as a true deepinv.physics.LinearPhysics subclass.
+    """Build and return the BartLinearPhysics class as a true subclass of
+    ``deepinv.physics.LinearPhysics``.
 
-    Deferred so that the class is only constructed when deepinv is actually
-    installed — avoids an ImportError at module load time for users who don't
-    have deepinv.
+    Construction is deferred to this function so that the class is only
+    created when deepinv is actually installed — importing this module does
+    not raise an ``ImportError`` if deepinv is absent.
     """
     try:
         from deepinv.physics import LinearPhysics  # noqa: PLC0415

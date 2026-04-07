@@ -19,13 +19,6 @@ class BartLinop:
     ----------
     _handle : BartLinopHandle
         Low-level C++ handle returned by ``_bartorch_ext.create_encoding_op``.
-
-    Attributes
-    ----------
-    ishape : tuple[int, ...]
-        Domain (input) shape in C-order.
-    oshape : tuple[int, ...]
-        Codomain (output) shape in C-order.
     """
 
     def __init__(self, _handle: object) -> None:
@@ -33,12 +26,12 @@ class BartLinop:
 
     @property
     def ishape(self) -> tuple[int, ...]:
-        """Domain shape in C-order."""
+        """Domain (input) shape in C-order."""
         return tuple(self._handle.ishape)
 
     @property
     def oshape(self) -> tuple[int, ...]:
-        """Codomain shape in C-order."""
+        """Codomain (output) shape in C-order."""
         return tuple(self._handle.oshape)
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:

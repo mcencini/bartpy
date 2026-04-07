@@ -11,4 +11,4 @@ and rendered here by `nbsphinx <https://nbsphinx.readthedocs.io>`_.
    :caption: Notebooks
 
    01_high_level_tools
-   02_library_internals
+   02_deepinv_example

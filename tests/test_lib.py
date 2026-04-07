@@ -207,12 +207,17 @@ def test_conjgrad_solve_consistency():
 
 def test_solve_convergence():
     """CG reconstruction is closer to ground truth than the zero image."""
-    ksp, sens, img = _make_cartesian_data()
+    _, sens, img = _make_cartesian_data()
     E = bl.encoding_op(sens)
-    y = ksp.reshape(E.oshape)
+
+    # Generate k-space using the BART SENSE forward model so that the data are
+    # consistent with the operator (bt.fft uses a centred/modulated FFT that
+    # differs from the uncentred FFT used internally by BART's maps_create).
+    img_ref = img.reshape(E.ishape)
+    y = E.forward(img_ref)
+
     x_rec = E.solve(y, maxiter=30, lam=1e-4)
 
-    img_ref = img.reshape(E.ishape)
     err_rec = _nrmse(x_rec.real, img_ref.real)
     err_zero = _nrmse(torch.zeros_like(x_rec.real), img_ref.real)
 
@@ -229,21 +234,25 @@ def test_solve_convergence():
 def test_noncartesian_encoding_op():
     """encoding_op with traj creates an operator and applies correctly."""
     traj = bt.traj(r=True, x=_NX, y=_NX)
-    # Radial ksp_shape: C-order (nc, nspokes, nsamples) → (nc, nx, nx)
-    ksp_shape = (_NC, _NX, _NX)
+    # BART non-Cartesian ksp shape: C-order (nc, nspokes, nsamples, 1).
+    # The trailing 1 maps to BART Fortran dim 0 = 1 (the trivial spatial
+    # x-dimension; BART requires ksp_dims[0]==1 for NUFFT k-space).
+    ksp_shape = (_NC, _NX, _NX, 1)
 
     ksp_calib = bt.phantom([_NY, _NX], kspace=True, ncoils=_NC)
     sens = bt.ecalib(ksp_calib, calib_size=16, maps=1)
 
     E = bl.encoding_op(sens, ksp_shape=ksp_shape, traj=traj)
     assert isinstance(E, bl.BartLinop)
-    assert E.oshape[-1] == _NX
+    assert _NX in E.oshape
 
 
 def test_noncartesian_forward_shape():
     """Non-Cartesian E.forward output matches E.oshape."""
     traj = bt.traj(r=True, x=_NX, y=_NX)
-    ksp_shape = (_NC, _NX, _NX)
+    # BART non-Cartesian ksp shape: C-order (nc, nspokes, nsamples, 1).
+    # The trailing 1 maps to BART Fortran dim 0 = 1 (required by NUFFT).
+    ksp_shape = (_NC, _NX, _NX, 1)
     ksp_calib = bt.phantom([_NY, _NX], kspace=True, ncoils=_NC)
     sens = bt.ecalib(ksp_calib, calib_size=16, maps=1)
 

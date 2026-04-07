@@ -8,6 +8,7 @@ To run locally:
 To run on a GPU CI runner:
     pytest tests/test_cuda.py -v --tb=short
 """
+
 import pytest
 import torch
 
@@ -22,10 +23,12 @@ pytestmark = pytest.mark.skipif(
 # Helpers
 # ---------------------------------------------------------------------------
 
+
 def _bart_available() -> bool:
     """Return True if the bartorch C++ extension compiled and loads correctly."""
     try:
         import bartorch.tools as bt
+
         bt.phantom(x=8)
         return True
     except Exception:
@@ -43,6 +46,7 @@ DEVICE = "cuda:0"
 # ---------------------------------------------------------------------------
 # Basic CUDA tensor round-trip via BART FFT
 # ---------------------------------------------------------------------------
+
 
 @bart_available
 def test_fft_cuda_output_on_device():
@@ -72,7 +76,7 @@ def test_fft_cuda_matches_cpu():
 
     # Results must agree to within float32 rounding.
     assert torch.allclose(y_gpu.cpu(), y_cpu, atol=1e-4, rtol=1e-4), (
-        f"CUDA/CPU FFT mismatch: max_diff={( y_gpu.cpu() - y_cpu).abs().max().item():.6f}"
+        f"CUDA/CPU FFT mismatch: max_diff={(y_gpu.cpu() - y_cpu).abs().max().item():.6f}"
     )
 
 
@@ -96,6 +100,7 @@ def test_ifft_cuda_roundtrip():
 # Mixed device: CPU input must produce CPU output (no silent device change)
 # ---------------------------------------------------------------------------
 
+
 @bart_available
 def test_fft_cpu_input_stays_cpu():
     """bt.fft on a CPU tensor must return a CPU tensor, not CUDA."""
@@ -110,6 +115,7 @@ def test_fft_cpu_input_stays_cpu():
 # ---------------------------------------------------------------------------
 # Zero-copy: input tensor data pointer must not be modified by BART
 # ---------------------------------------------------------------------------
+
 
 @bart_available
 def test_cuda_input_not_corrupted():
@@ -130,6 +136,7 @@ def test_cuda_input_not_corrupted():
 # (phantom has no tensor inputs, but the output should still be on CPU
 # since there are no CUDA inputs to trigger GPU dispatch)
 # ---------------------------------------------------------------------------
+
 
 @bart_available
 def test_phantom_cpu_output():

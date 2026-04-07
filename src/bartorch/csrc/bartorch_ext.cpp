@@ -75,7 +75,22 @@ void bartorch_unregister_torch_prior(const std::string& name);
 void init_lib_ops(py::module_& m);
 
 #ifdef USE_CUDA
+#include <cuda_runtime.h>
 #include "cuda/cuda_bridge.hpp"
+
+// GPU dispatch mode functions — implemented in cuda/bartorch_cuda_dispatch.cpp.
+// When active, __wrap_memcfl_create allocates BART's output CFL buffer on the
+// GPU via cudaMalloc instead of xmalloc, enabling full GPU zero-copy.
+void bartorch_enable_gpu_dispatch(int device_id);
+void bartorch_disable_gpu_dispatch();
+bool bartorch_is_gpu_dispatch_active();
+int  bartorch_gpu_dispatch_device();
+
+// BART GPU initialisation — from num/init.h / num/gpuops.h.
+extern "C" {
+    extern bool bart_use_gpu;
+    void num_init_gpu_support(void);
+}
 #endif
 
 namespace py = pybind11;
@@ -262,19 +277,58 @@ static py::object run(
     static std::atomic<uint64_t> s_call_id{0};
     uint64_t call_id = s_call_id.fetch_add(1, std::memory_order_relaxed);
 
+    // ── Detect whether all inputs are CUDA tensors (GPU zero-copy path) ────
+    // GPU zero-copy: when every input lives on the same CUDA device we
+    //   (a) register device pointers directly (no host-side clone),
+    //   (b) enable GPU dispatch so __wrap_memcfl_create allocates the output
+    //       CFL buffer via cudaMalloc instead of xmalloc, and
+    //   (c) initialise BART's GPU subsystem so it routes ops to CUDA kernels.
+    // If ANY input is CPU (or inputs are mixed-device), fall through to the
+    // existing CPU path.
+    bool   all_cuda    = false;
+    int    cuda_device = -1;
+#ifdef USE_CUDA
+    if (!py_inputs.empty()) {
+        all_cuda = true;
+        for (size_t i = 0; i < (size_t)py_inputs.size(); ++i) {
+            torch::Tensor ti = py_inputs[i].cast<torch::Tensor>();
+            if (!ti.is_cuda()) { all_cuda = false; break; }
+            int dev = ti.device().index();
+            if (cuda_device < 0) {
+                cuda_device = dev;
+            } else if (cuda_device != dev) {
+                all_cuda = false;  // mixed CUDA devices — use CPU path
+                break;
+            }
+        }
+    }
+    if (all_cuda) {
+        bartorch_enable_gpu_dispatch(cuda_device);
+        // Initialise BART's CUDA subsystem for this device (idempotent after
+        // first call per device).  num_init_gpu_support() sets bart_use_gpu=true
+        // and calls cuda_init(), which is required for BART's cuFFT/cuBLAS code
+        // paths to activate when it sees GPU pointers.
+        bart_use_gpu = true;
+        num_init_gpu_support();
+    }
+#endif
+
     std::vector<std::string>   input_names;
     std::vector<torch::Tensor> inputs;   // keep alive until after bart_command
 
     for (size_t i = 0; i < (size_t)py_inputs.size(); ++i) {
         torch::Tensor t = py_inputs[i].cast<torch::Tensor>();
-        // Ensure complex64 and C-contiguous, then always clone.
-        // Cloning is required because some BART commands (e.g. pocsense)
-        // modify their input buffers in-place (scaling, normalisation).
-        // Without a private copy the original Python tensor would be silently
-        // corrupted, producing wrong results in subsequent computations.
-        // Cloning here also prevents aliased-input refcount underflows in
-        // memcfl_unmap (previously handled by the per-pair clone below).
-        t = t.to(torch::kComplexFloat).contiguous().clone();
+        // GPU path: keep the tensor on its device (zero-copy input).
+        // CPU path: ensure complex64 and C-contiguous, then always clone.
+        // Cloning is required for CPU because some BART commands (e.g. pocsense)
+        // modify their input buffers in-place.  For GPU tensors the same issue
+        // applies, but BART's GPU kernels typically work out-of-place, and any
+        // in-place modification would only affect our device-side clone anyway.
+        if (all_cuda) {
+            t = t.to(torch::kComplexFloat).contiguous();  // stays on GPU, no clone
+        } else {
+            t = t.to(torch::kComplexFloat).contiguous().clone();
+        }
 
         inputs.push_back(t);
 
@@ -345,7 +399,13 @@ static py::object run(
 
     debug_level = saved_debug;
 
-    // ── 3. Clean up input registrations ───────────────────────────────────
+    // ── 3. Disable GPU dispatch mode (reset before any early return) ───────
+#ifdef USE_CUDA
+    if (all_cuda)
+        bartorch_disable_gpu_dispatch();
+#endif
+
+    // ── 4. Clean up input registrations ───────────────────────────────────
     // After a successful bart_command() call:
     //   - Each input was loaded by the tool (refcount: 1 → 2) then unmapped
     //     (refcount: 2 → 1) by the BART tool code.
@@ -365,7 +425,7 @@ static py::object run(
     // Note: on ret != 0, input entries are intentionally left in the registry
     // with their call-id-scoped names and will not interfere with future calls.
 
-    // ── 4. Handle BART error ───────────────────────────────────────────────
+    // ── 5. Handle BART error ───────────────────────────────────────────────
     if (ret != 0) {
         if (memcfl_exists(output_name.c_str()))
             memcfl_unlink(output_name.c_str());
@@ -376,7 +436,7 @@ static py::object run(
         throw std::runtime_error(msg);
     }
 
-    // ── 5. Retrieve scalar text output (nrmse, bitmask, …) ────────────────
+    // ── 6. Retrieve scalar text output (nrmse, bitmask, …) ────────────────
     // For scalar-output tools (!want_cfl_output) we never registered an output
     // CFL, so skip the memcfl_exists check entirely.
     if (!want_cfl_output || !memcfl_exists(output_name.c_str())) {
@@ -384,7 +444,7 @@ static py::object run(
         return py::none();
     }
 
-    // ── 6. Retrieve CFL output ────────────────────────────────────────────
+    // ── 7. Retrieve CFL output ────────────────────────────────────────────
     long bart_dims_out[BART_DIMS] = {0};
     // memcfl_load increments refcount (0 → 1 after tool's unmap_cfl already
     // brought it to 0).
@@ -409,6 +469,39 @@ static py::object run(
     for (int j = 0; j < ndim_out; ++j)
         shape_out[j] = bart_dims_out[ndim_out - 1 - j];
 
+    // Total output byte count (all BART_DIMS, including padding 1s).
+    size_t byte_count = 1;
+    for (int j = 0; j < BART_DIMS; ++j) byte_count *= (size_t)bart_dims_out[j];
+    byte_count *= sizeof(c10::complex<float>);
+
+#ifdef USE_CUDA
+    // ── 7a. GPU output path ──────────────────────────────────────────────
+    // ptr is a cudaMalloc'd device buffer (from __wrap_memcfl_create).
+    // Create the result tensor on the same CUDA device and do a D2D copy.
+    // The D2D copy is much cheaper than a D2H+H2D round-trip and avoids the
+    // shared-malloc aliasing bug that affects the CPU path (different allocators).
+    if (all_cuda) {
+        auto result = torch::empty(
+            shape_out,
+            torch::TensorOptions()
+                .dtype(torch::kComplexFloat)
+                .device(torch::kCUDA, cuda_device));
+
+        cudaMemcpy(result.data_ptr(), ptr,
+                   (size_t)result.numel() * sizeof(c10::complex<float>),
+                   cudaMemcpyDeviceToDevice);
+
+        memcfl_unmap(ptr);               // refcount 1 → 0
+        memcfl_unlink(output_name.c_str()); // removes entry; managed=false, no xfree
+        cudaFree(ptr);                   // free the cudaMalloc'd buffer
+
+        // Synchronise so the caller sees fully written GPU data.
+        cudaDeviceSynchronize();
+        return py::cast(result);
+    }
+#endif
+
+    // ── 7b. CPU output path ───────────────────────────────────────────────
     // Copy the BART output into a temporary buffer BEFORE calling torch::empty.
     //
     // Root cause of the "all-zeros on 2nd call" bug:
@@ -424,10 +517,6 @@ static py::object run(
     //   buffer.  torch::empty is called only after we hold the data safely in
     //   the vector.  The vector uses its own (stack/heap) storage that the
     //   BART malloc pool cannot alias.
-    size_t byte_count = 1;
-    for (int j = 0; j < BART_DIMS; ++j) byte_count *= (size_t)bart_dims_out[j];
-    byte_count *= sizeof(c10::complex<float>);
-
     std::vector<char> tmp(byte_count);
     std::memcpy(tmp.data(), ptr, byte_count);
 

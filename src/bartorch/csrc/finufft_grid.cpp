@@ -172,16 +172,21 @@ struct FinufftPlanKey {
 };
 
 struct FinufftPlanKeyHash {
+    // Boost-style hash_combine: avoids XOR-only poor avalanche behaviour.
+    static std::size_t combine(std::size_t seed, std::size_t val) noexcept
+    {
+        return seed ^ (val + 0x9e3779b97f4a7c15ULL + (seed << 6) + (seed >> 2));
+    }
+
     std::size_t operator()(const FinufftPlanKey& k) const noexcept
     {
-        // FNV-like combination
         std::size_t h = std::hash<const void*>{}(k.traj_ptr);
-        h ^= std::hash<long>{}(k.Nx)       * 0x9e3779b97f4a7c15ULL;
-        h ^= std::hash<long>{}(k.Ny)       * 0x6c62272e07bb0142ULL;
-        h ^= std::hash<long>{}(k.Nz)       * 0x94d049bb133111ebULL;
-        h ^= std::hash<long>{}(k.n_transf) * 0xbf58476d1ce4e5b9ULL;
-        h ^= std::hash<int> {}(k.type)     * 0x517cc1b727220a95ULL;
-        h ^= std::hash<int> {}(k.ndim)     * 0xc4ceb9fe1a85ec53ULL;
+        h = combine(h, std::hash<long>{}(k.Nx));
+        h = combine(h, std::hash<long>{}(k.Ny));
+        h = combine(h, std::hash<long>{}(k.Nz));
+        h = combine(h, std::hash<long>{}(k.n_transf));
+        h = combine(h, std::hash<int> {}(k.type));
+        h = combine(h, std::hash<int> {}(k.ndim));
         return h;
     }
 };
@@ -189,6 +194,9 @@ struct FinufftPlanKeyHash {
 static std::mutex s_plan_cache_mutex;
 static std::unordered_map<FinufftPlanKey, finufftf_plan, FinufftPlanKeyHash>
     s_plan_cache;
+/// Secondary index: traj_ptr → list of keys, for O(1) invalidation.
+static std::unordered_map<const void*, std::vector<FinufftPlanKey>>
+    s_traj_index;
 
 /// Remove all cache entries whose traj_ptr matches @p ptr.
 /// Called from BartLinopHandle's destructor before the trajectory tensor is
@@ -197,14 +205,17 @@ static std::unordered_map<FinufftPlanKey, finufftf_plan, FinufftPlanKeyHash>
 extern "C" void bartorch_finufft_invalidate_traj(const void* ptr)
 {
     std::unique_lock<std::mutex> lk(s_plan_cache_mutex);
-    for (auto it = s_plan_cache.begin(); it != s_plan_cache.end(); ) {
-        if (it->first.traj_ptr == ptr) {
+    auto idx_it = s_traj_index.find(ptr);
+    if (idx_it == s_traj_index.end()) return;
+
+    for (const auto& key : idx_it->second) {
+        auto it = s_plan_cache.find(key);
+        if (it != s_plan_cache.end()) {
             finufftf_destroy(it->second);
-            it = s_plan_cache.erase(it);
-        } else {
-            ++it;
+            s_plan_cache.erase(it);
         }
     }
+    s_traj_index.erase(idx_it);
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -351,10 +362,11 @@ extern "C" void __wrap_grid2(
             0, nullptr, nullptr, nullptr);
         if (ier != 0) { finufftf_destroy(plan); return; }
 
-        // Insert into cache.
+        // Insert into cache and secondary index.
         {
             std::unique_lock<std::mutex> lk(s_plan_cache_mutex);
             s_plan_cache.emplace(key, plan);
+            s_traj_index[traj_c].push_back(key);
         }
     }
 
@@ -456,6 +468,7 @@ extern "C" void __wrap_grid2H(
         {
             std::unique_lock<std::mutex> lk(s_plan_cache_mutex);
             s_plan_cache.emplace(key, plan);
+            s_traj_index[traj_c].push_back(key);
         }
     }
 

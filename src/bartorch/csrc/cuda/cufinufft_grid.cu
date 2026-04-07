@@ -55,6 +55,9 @@
 #include <cstdint>
 #include <cmath>
 #include <cstring>
+#include <mutex>
+#include <unordered_map>
+#include <vector>
 
 extern "C" {
 #ifndef _Bool
@@ -99,6 +102,101 @@ static constexpr float CUFINUFFT_GRID_TOL = 1e-6f;
 // ES-kernel parameters for nspread=7, upsampfac=2.0 (same as finufft_grid.cpp)
 static constexpr float ES_BETA = 16.1f;
 static constexpr float ES_HW   = 3.5f;   // nspread / 2
+
+// =============================================================================
+// cuFINUFFT plan cache
+// =============================================================================
+//
+// Mirrors the CPU plan cache in finufft_grid.cpp.  Plans are keyed by the
+// trajectory device pointer + grid geometry so that within a CG iterate (many
+// forward/adjoint calls with identical trajectory) `makeplan`+`setpts` is only
+// executed once.  The trajectory pointer is stable for the lifetime of a
+// BartLinopHandle (encoding_op) and throughout a single bart_command() run
+// (CLI, e.g. pics).
+//
+// Thread safety: protected by a std::mutex.
+// Invalidation:
+//   - BartLinopHandle::~BartLinopHandle() calls bartorch_cufinufft_invalidate_traj()
+//     before freeing the trajectory tensor.
+//   - After each bart_command() call, bartorch_cufinufft_flush_all() is called
+//     to purge all entries (prevents ABA reuse of CLI-allocated CFL pointers).
+// =============================================================================
+
+struct CuFinufftPlanKey {
+    const void* traj_ptr; ///< device pointer of the trajectory CFL
+    long        Nx, Ny, Nz;
+    long        n_transf;
+    int         type;     ///< 1 = adjoint (cuda_grid), 2 = forward (cuda_gridH)
+    int         ndim;
+
+    bool operator==(const CuFinufftPlanKey& o) const noexcept
+    {
+        return traj_ptr == o.traj_ptr
+            && Nx       == o.Nx   && Ny == o.Ny && Nz == o.Nz
+            && n_transf == o.n_transf
+            && type     == o.type && ndim == o.ndim;
+    }
+};
+
+struct CuFinufftPlanKeyHash {
+    // Boost-style hash_combine using the 64-bit golden ratio constant
+    // (0x9e3779b97f4a7c15 = 2^64 / φ) for better avalanche behaviour than
+    // a plain XOR — same technique used by Boost and the CPU-side cache.
+    static std::size_t combine(std::size_t seed, std::size_t val) noexcept
+    {
+        return seed ^ (val + 0x9e3779b97f4a7c15ULL + (seed << 6) + (seed >> 2));
+    }
+
+    std::size_t operator()(const CuFinufftPlanKey& k) const noexcept
+    {
+        std::size_t h = std::hash<const void*>{}(k.traj_ptr);
+        h = combine(h, std::hash<long>{}(k.Nx));
+        h = combine(h, std::hash<long>{}(k.Ny));
+        h = combine(h, std::hash<long>{}(k.Nz));
+        h = combine(h, std::hash<long>{}(k.n_transf));
+        h = combine(h, std::hash<int> {}(k.type));
+        h = combine(h, std::hash<int> {}(k.ndim));
+        return h;
+    }
+};
+
+static std::mutex s_cu_plan_cache_mutex;
+static std::unordered_map<CuFinufftPlanKey, cufinufftf_plan, CuFinufftPlanKeyHash>
+    s_cu_plan_cache;
+/// Secondary index: traj_ptr → list of keys, for O(1) invalidation.
+static std::unordered_map<const void*, std::vector<CuFinufftPlanKey>>
+    s_cu_traj_index;
+
+/// Remove all cache entries whose traj_ptr matches @p ptr.
+/// Called from BartLinopHandle's destructor before the trajectory tensor is
+/// freed on the GPU side, preventing ABA pointer reuse.
+extern "C" void bartorch_cufinufft_invalidate_traj(const void* ptr)
+{
+    std::unique_lock<std::mutex> lk(s_cu_plan_cache_mutex);
+    auto idx_it = s_cu_traj_index.find(ptr);
+    if (idx_it == s_cu_traj_index.end()) return;
+
+    for (const auto& key : idx_it->second) {
+        auto it = s_cu_plan_cache.find(key);
+        if (it != s_cu_plan_cache.end()) {
+            cufinufftf_destroy(it->second);
+            s_cu_plan_cache.erase(it);
+        }
+    }
+    s_cu_traj_index.erase(idx_it);
+}
+
+/// Flush the entire cuFINUFFT plan cache.
+/// Called at the end of each bart_command() run to prevent ABA reuse of
+/// CLI-allocated CFL trajectory pointers across successive command calls.
+extern "C" void bartorch_cufinufft_flush_all()
+{
+    std::unique_lock<std::mutex> lk(s_cu_plan_cache_mutex);
+    for (auto& kv : s_cu_plan_cache)
+        cufinufftf_destroy(kv.second);
+    s_cu_plan_cache.clear();
+    s_cu_traj_index.clear();
+}
 
 // ---------------------------------------------------------------------------
 // CUDA kernel: extract and scale trajectory coordinates from GPU memory
@@ -201,6 +299,110 @@ static int spatial_ndim_gpu(const long grid_dims[4])
 }
 
 // ---------------------------------------------------------------------------
+// RAII wrapper for CUDA device memory allocations used inside the plan helper
+// ---------------------------------------------------------------------------
+struct CuDevicePtr {
+    float* ptr = nullptr;
+    explicit CuDevicePtr(size_t n_floats)
+    {
+        if (n_floats > 0)
+            cudaMalloc(&ptr, n_floats * sizeof(float));
+    }
+    ~CuDevicePtr() { if (ptr) cudaFree(ptr); }
+    // Non-copyable
+    CuDevicePtr(const CuDevicePtr&)            = delete;
+    CuDevicePtr& operator=(const CuDevicePtr&) = delete;
+    // Implicit conversion so it can be passed directly to CUDA APIs
+    operator float*() const { return ptr; }
+    bool ok() const { return ptr != nullptr; }
+};
+
+// ---------------------------------------------------------------------------
+// get_or_make_cufinufft_plan — cache-aware plan helper
+// ---------------------------------------------------------------------------
+//
+// On a cache hit (same traj_ptr + grid geometry): returns the cached plan.
+// On a cache miss: calls makeplan + setpts, inserts into cache, then frees
+//   the temporary device coordinate arrays (cuFINUFFT copies them into the
+//   plan's internal storage during setpts).
+//
+// Returns nullptr if makeplan or setpts fails (caller should fall back to
+// BART's native GPU gridder).
+//
+static cufinufftf_plan get_or_make_cufinufft_plan(
+    const _Complex float* traj_c,   ///< device trajectory pointer (cache key)
+    int                   type,     ///< 1 = adjoint, 2 = forward
+    int                   ndim,
+    long Nx, long Ny, long Nz,
+    long M_per,
+    int  n_transf,
+    float sx, float sy, float sz)
+{
+    CuFinufftPlanKey key{ (const void*)traj_c, Nx, Ny, Nz,
+                          (long)n_transf, type, ndim };
+
+    {
+        std::unique_lock<std::mutex> lk(s_cu_plan_cache_mutex);
+        auto it = s_cu_plan_cache.find(key);
+        if (it != s_cu_plan_cache.end())
+            return it->second;   // cache hit: skip makeplan+setpts
+    }
+
+    // Cache miss — build plan.
+    // Allocate temporary device coordinate arrays (freed automatically on scope exit).
+    CuDevicePtr d_xj(M_per);
+    CuDevicePtr d_yj(ndim >= 2 ? M_per : 0);
+    CuDevicePtr d_zj(ndim >= 3 ? M_per : 0);
+
+    if (!d_xj.ok() || (ndim >= 2 && !d_yj.ok()) || (ndim >= 3 && !d_zj.ok()))
+        return nullptr;   // cudaMalloc failed
+
+    // Extract trajectory coordinates on GPU.
+    int threads = 256;
+    int blocks  = (int)((M_per + threads - 1) / threads);
+    k_extract_coords<<<blocks, threads>>>(
+        M_per, (const float2*)traj_c,
+        sx, sy, sz, ndim,
+        d_xj, d_yj, d_zj);
+
+    // Make cuFINUFFT plan.
+    cufinufft_opts opts;
+    cufinufft_default_opts(&opts);
+    opts.gpu_spreadinterponly = 1;
+    opts.upsampfac             = 2.0;
+    opts.debug                 = 0;
+
+    cufinufftf_plan plan = nullptr;
+    int64_t n_modes[3] = { Nx, Ny, Nz };
+    int ier = cufinufftf_makeplan(
+        type, ndim, n_modes,
+        +1, n_transf,
+        CUFINUFFT_GRID_TOL, &plan, &opts);
+    if (ier != 0 || plan == nullptr)
+        return nullptr;   // d_xj/d_yj/d_zj freed by CuDevicePtr destructors
+
+    // Set nonuniform points (cuFINUFFT copies coords into its internal buffers).
+    ier = cufinufftf_setpts(plan, M_per, d_xj,
+                            (ndim >= 2) ? (float*)d_yj : nullptr,
+                            (ndim >= 3) ? (float*)d_zj : nullptr,
+                            0, nullptr, nullptr, nullptr);
+    // d_xj/d_yj/d_zj freed automatically at end of scope (CuDevicePtr destructor).
+
+    if (ier != 0) {
+        cufinufftf_destroy(plan);
+        return nullptr;
+    }
+
+    // Insert into cache.
+    {
+        std::unique_lock<std::mutex> lk(s_cu_plan_cache_mutex);
+        s_cu_plan_cache.emplace(key, plan);
+        s_cu_traj_index[key.traj_ptr].push_back(key);
+    }
+    return plan;
+}
+
+// ---------------------------------------------------------------------------
 // __wrap_cuda_grid — adjoint gridding: nonuniform k-space → Cartesian grid
 // ---------------------------------------------------------------------------
 //
@@ -208,7 +410,7 @@ static int spatial_ndim_gpu(const long grid_dims[4])
 //   cuda_grid(conf, ksp_dims[4], trj_strs[4], traj, grid_dims[4], grid_strs[4],
 //             grid, ksp_strs[4], src)
 //
-// Fall back to BART's KB GPU gridder when conf->os != 2.0 (decomp mode).
+// Falls back to BART's KB GPU gridder when conf->os != 2.0 (decomp mode).
 //
 extern "C" void __wrap_cuda_grid(
     const struct grid_conf_s* conf,
@@ -227,98 +429,41 @@ extern "C" void __wrap_cuda_grid(
         return;
     }
 
-    const int  ndim     = spatial_ndim_gpu(grid_dims);
-    const long Nx       = grid_dims[0];
-    const long Ny       = (ndim >= 2) ? grid_dims[1] : 1L;
-    const long Nz       = (ndim >= 3) ? grid_dims[2] : 1L;
+    const int  ndim  = spatial_ndim_gpu(grid_dims);
+    const long Nx    = grid_dims[0];
+    const long Ny    = (ndim >= 2) ? grid_dims[1] : 1L;
+    const long Nz    = (ndim >= 3) ? grid_dims[2] : 1L;
 
-    // Total k-space samples M = ∏ ksp_dims[1..3]  (ksp_dims[0]=1)
-    long M = ksp_dims[1] * ksp_dims[2] * ksp_dims[3];
-    // Batch count = ∏ ksp_dims[3] (coils — 4-D layout)
-    // For batched cuFINUFFT n_transf = ksp_dims[3]
-    int n_transf = (int)ksp_dims[3];
-    // M per transform = ksp_dims[1]*ksp_dims[2]
-    long M_per = ksp_dims[1] * ksp_dims[2];
+    int  n_transf = (int)ksp_dims[3];
+    long M_per    = ksp_dims[1] * ksp_dims[2];
 
-    if (M == 0 || n_transf == 0) return;
+    if (M_per == 0 || n_transf == 0) return;
 
-    // Coordinate scaling factors
     const float TWO_PI = 2.0f * (float)M_PI;
     float sx = conf->os * TWO_PI / (float)Nx;
     float sy = (ndim >= 2) ? conf->os * TWO_PI / (float)Ny : 0.f;
     float sz = (ndim >= 3) ? conf->os * TWO_PI / (float)Nz : 0.f;
 
-    // Allocate device coordinate arrays
-    float *d_xj = nullptr, *d_yj = nullptr, *d_zj = nullptr;
-    cudaMalloc(&d_xj, (size_t)M_per * sizeof(float));
-    if (ndim >= 2) cudaMalloc(&d_yj, (size_t)M_per * sizeof(float));
-    if (ndim >= 3) cudaMalloc(&d_zj, (size_t)M_per * sizeof(float));
+    cufinufftf_plan plan = get_or_make_cufinufft_plan(
+        traj_c, 1, ndim, Nx, Ny, Nz, M_per, n_transf, sx, sy, sz);
+    if (plan == nullptr) {
+        __real_cuda_grid(conf, ksp_dims, trj_strs, traj_c,
+                         grid_dims, grid_strs, grid_c, ksp_strs, src_c);
+        return;
+    }
 
-    // Extract coordinates using GPU kernel
-    int threads = 256;
-    int blocks  = (int)((M_per + threads - 1) / threads);
-    k_extract_coords<<<blocks, threads>>>(
-        M_per,
-        (const float2*)traj_c,
-        sx, sy, sz, ndim,
-        d_xj, d_yj, d_zj);
-
-    // Zero the output grid (BART may not clear it before calling cuda_grid)
+    // Zero the output grid (BART may not clear it before calling cuda_grid).
     cudaMemset(grid_c, 0,
-        (size_t)(n_transf * Nx * Ny * Nz) * sizeof(cuFloatComplex));
-
-    // cuFINUFFT plan
-    cufinufft_opts opts;
-    cufinufft_default_opts(&opts);
-    opts.gpu_spreadinterponly = 1;
-    opts.upsampfac             = 2.0;
-    opts.debug                 = 0;
-
-    cufinufftf_plan plan = nullptr;
-    int64_t n_modes[3] = { Nx, Ny, Nz };
-    int ier = cufinufftf_makeplan(
-        1, ndim, n_modes,
-        +1, n_transf,
-        CUFINUFFT_GRID_TOL, &plan, &opts);
-    if (ier != 0 || plan == nullptr) {
-        // cuFINUFFT setup failed — fall back to BART KB GPU gridder
-        cudaFree(d_xj);
-        if (d_yj) cudaFree(d_yj);
-        if (d_zj) cudaFree(d_zj);
-        __real_cuda_grid(conf, ksp_dims, trj_strs, traj_c,
-                         grid_dims, grid_strs, grid_c, ksp_strs, src_c);
-        return;
-    }
-
-    ier = cufinufftf_setpts(plan, M_per, d_xj,
-                            (ndim >= 2) ? d_yj : nullptr,
-                            (ndim >= 3) ? d_zj : nullptr,
-                            0, nullptr, nullptr, nullptr);
-    if (ier != 0) {
-        cufinufftf_destroy(plan);
-        cudaFree(d_xj);
-        if (d_yj) cudaFree(d_yj);
-        if (d_zj) cudaFree(d_zj);
-        __real_cuda_grid(conf, ksp_dims, trj_strs, traj_c,
-                         grid_dims, grid_strs, grid_c, ksp_strs, src_c);
-        return;
-    }
+               (size_t)(n_transf * Nx * Ny * Nz) * sizeof(cuFloatComplex));
 
     // type-1 execute: c = src (NU k-space), fk = grid (Cartesian)
-    ier = cufinufftf_execute(plan,
+    int ier = cufinufftf_execute(plan,
         (cuFloatComplex*)const_cast<_Complex float*>(src_c),
         (cuFloatComplex*)grid_c);
 
-    cufinufftf_destroy(plan);
-    cudaFree(d_xj);
-    if (d_yj) cudaFree(d_yj);
-    if (d_zj) cudaFree(d_zj);
-
     if (ier != 0) {
-        // Execute failed — fall through (output may be garbage; BART will notice)
-        // Re-run with BART's own gridder
         cudaMemset(grid_c, 0,
-            (size_t)(n_transf * Nx * Ny * Nz) * sizeof(cuFloatComplex));
+                   (size_t)(n_transf * Nx * Ny * Nz) * sizeof(cuFloatComplex));
         __real_cuda_grid(conf, ksp_dims, trj_strs, traj_c,
                          grid_dims, grid_strs, grid_c, ksp_strs, src_c);
     }
@@ -349,8 +494,8 @@ extern "C" void __wrap_cuda_gridH(
     const long Ny    = (ndim >= 2) ? grid_dims[1] : 1L;
     const long Nz    = (ndim >= 3) ? grid_dims[2] : 1L;
 
-    long M_per   = ksp_dims[1] * ksp_dims[2];
-    int n_transf = (int)ksp_dims[3];
+    int  n_transf = (int)ksp_dims[3];
+    long M_per    = ksp_dims[1] * ksp_dims[2];
 
     if (M_per == 0 || n_transf == 0) return;
 
@@ -359,71 +504,26 @@ extern "C" void __wrap_cuda_gridH(
     float sy = (ndim >= 2) ? conf->os * TWO_PI / (float)Ny : 0.f;
     float sz = (ndim >= 3) ? conf->os * TWO_PI / (float)Nz : 0.f;
 
-    float *d_xj = nullptr, *d_yj = nullptr, *d_zj = nullptr;
-    cudaMalloc(&d_xj, (size_t)M_per * sizeof(float));
-    if (ndim >= 2) cudaMalloc(&d_yj, (size_t)M_per * sizeof(float));
-    if (ndim >= 3) cudaMalloc(&d_zj, (size_t)M_per * sizeof(float));
+    cufinufftf_plan plan = get_or_make_cufinufft_plan(
+        traj_c, 2, ndim, Nx, Ny, Nz, M_per, n_transf, sx, sy, sz);
+    if (plan == nullptr) {
+        __real_cuda_gridH(conf, ksp_dims, trj_strs, traj_c,
+                          ksp_strs, dst_c, grid_dims, grid_strs, grid_c);
+        return;
+    }
 
-    int threads = 256;
-    int blocks  = (int)((M_per + threads - 1) / threads);
-    k_extract_coords<<<blocks, threads>>>(
-        M_per,
-        (const float2*)traj_c,
-        sx, sy, sz, ndim,
-        d_xj, d_yj, d_zj);
-
-    // Zero k-space output
+    // Zero k-space output.
     cudaMemset(dst_c, 0,
-        (size_t)(n_transf * M_per) * sizeof(cuFloatComplex));
-
-    cufinufft_opts opts;
-    cufinufft_default_opts(&opts);
-    opts.gpu_spreadinterponly = 1;
-    opts.upsampfac             = 2.0;
-    opts.debug                 = 0;
-
-    cufinufftf_plan plan = nullptr;
-    int64_t n_modes[3] = { Nx, Ny, Nz };
-    int ier = cufinufftf_makeplan(
-        2, ndim, n_modes,
-        +1, n_transf,
-        CUFINUFFT_GRID_TOL, &plan, &opts);
-    if (ier != 0 || plan == nullptr) {
-        cudaFree(d_xj);
-        if (d_yj) cudaFree(d_yj);
-        if (d_zj) cudaFree(d_zj);
-        __real_cuda_gridH(conf, ksp_dims, trj_strs, traj_c,
-                          ksp_strs, dst_c, grid_dims, grid_strs, grid_c);
-        return;
-    }
-
-    ier = cufinufftf_setpts(plan, M_per, d_xj,
-                            (ndim >= 2) ? d_yj : nullptr,
-                            (ndim >= 3) ? d_zj : nullptr,
-                            0, nullptr, nullptr, nullptr);
-    if (ier != 0) {
-        cufinufftf_destroy(plan);
-        cudaFree(d_xj);
-        if (d_yj) cudaFree(d_yj);
-        if (d_zj) cudaFree(d_zj);
-        __real_cuda_gridH(conf, ksp_dims, trj_strs, traj_c,
-                          ksp_strs, dst_c, grid_dims, grid_strs, grid_c);
-        return;
-    }
+               (size_t)(n_transf * M_per) * sizeof(cuFloatComplex));
 
     // type-2 execute: fk = grid (Cartesian, read-only), c = dst (NU output)
-    ier = cufinufftf_execute(plan,
+    int ier = cufinufftf_execute(plan,
         (cuFloatComplex*)dst_c,
         (cuFloatComplex*)const_cast<_Complex float*>(grid_c));
 
-    cufinufftf_destroy(plan);
-    cudaFree(d_xj);
-    if (d_yj) cudaFree(d_yj);
-    if (d_zj) cudaFree(d_zj);
-
     if (ier != 0) {
         cudaMemset(dst_c, 0,
-            (size_t)(n_transf * M_per) * sizeof(cuFloatComplex));
+                   (size_t)(n_transf * M_per) * sizeof(cuFloatComplex));
         __real_cuda_gridH(conf, ksp_dims, trj_strs, traj_c,
                           ksp_strs, dst_c, grid_dims, grid_strs, grid_c);
     }

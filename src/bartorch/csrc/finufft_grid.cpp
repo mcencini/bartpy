@@ -218,6 +218,18 @@ extern "C" void bartorch_finufft_invalidate_traj(const void* ptr)
     s_traj_index.erase(idx_it);
 }
 
+/// Flush the entire CPU FINUFFT plan cache.
+/// Called at the end of each bart_command() run to prevent ABA reuse of
+/// CLI-allocated CFL trajectory pointers across successive command calls.
+extern "C" void bartorch_finufft_flush_all()
+{
+    std::unique_lock<std::mutex> lk(s_plan_cache_mutex);
+    for (auto& kv : s_plan_cache)
+        finufftf_destroy(kv.second);
+    s_plan_cache.clear();
+    s_traj_index.clear();
+}
+
 // ─────────────────────────────────────────────────────────────────────────────
 // Internal helpers
 // ─────────────────────────────────────────────────────────────────────────────

@@ -72,10 +72,16 @@ extern "C" {
 
     void bartorch_linop_free(const struct linop_s *op);
 
-    /// Invalidate FINUFFT plan-cache entries whose traj_ptr matches ptr.
+    /// Invalidate CPU FINUFFT plan-cache entries whose traj_ptr matches ptr.
     /// Defined in finufft_grid.cpp; declared here so BartLinopHandle can call
     /// it at destruction time to prevent use-after-free of trajectory pointers.
     void bartorch_finufft_invalidate_traj(const void *ptr);
+
+#ifdef BARTORCH_USE_CUFINUFFT
+    /// Invalidate GPU cuFINUFFT plan-cache entries whose traj_ptr matches ptr.
+    /// Defined in cuda/cufinufft_grid.cu.
+    void bartorch_cufinufft_invalidate_traj(const void *ptr);
+#endif
 }
 // misc/types.h (pulled in transitively by BART headers included by lib_shim.c)
 // defines `#define auto __auto_type`.  Since this TU includes no BART headers
@@ -154,8 +160,12 @@ public:
         // BEFORE freeing the linop and BEFORE the kept_ tensors are destroyed.
         // This prevents the ABA problem where a new allocation reuses the same
         // pointer address and incorrectly gets a cache hit with stale setpts.
-        if (traj_data_ptr_)
+        if (traj_data_ptr_) {
             bartorch_finufft_invalidate_traj(traj_data_ptr_);
+#ifdef BARTORCH_USE_CUFINUFFT
+            bartorch_cufinufft_invalidate_traj(traj_data_ptr_);
+#endif
+        }
 
         if (op_) {
             bartorch_linop_free(op_);

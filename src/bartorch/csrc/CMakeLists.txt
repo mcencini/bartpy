@@ -559,6 +559,8 @@ pybind11_add_module(_bartorch_ext
     torch_prior.cpp
     torch_prior_nlop.c
     mkl_fftw_shim.c
+    lib_shim.c
+    lib_ops.cpp
 )
 target_include_directories(_bartorch_ext PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}

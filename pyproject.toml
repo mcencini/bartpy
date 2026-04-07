@@ -38,6 +38,9 @@ dev = [
     "nbstripout",
     "codespell",
 ]
+deepinv = [
+    "deepinv>=0.2",
+]
 docs = [
     "sphinx>=7.0",
     "sphinx-book-theme",

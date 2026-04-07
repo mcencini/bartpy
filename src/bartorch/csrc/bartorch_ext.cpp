@@ -71,6 +71,9 @@ void bartorch_register_torch_prior(const std::string& name,
                                    std::vector<long>  dims);
 void bartorch_unregister_torch_prior(const std::string& name);
 
+// lib_ops.cpp registration function.
+void init_lib_ops(py::module_& m);
+
 #ifdef USE_CUDA
 #include "cuda/cuda_bridge.hpp"
 #endif
@@ -472,4 +475,7 @@ PYBIND11_MODULE(_bartorch_ext, m) {
           &bartorch_unregister_torch_prior,
           py::arg("name"),
           "Remove a previously registered torch prior from the registry.");
+
+    // Library operator bindings (BartLinopHandle, create_encoding_op, …)
+    init_lib_ops(m);
 }

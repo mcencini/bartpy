@@ -103,6 +103,8 @@
 
 #include <complex>
 #include <cstring>
+#include <mutex>
+#include <unordered_map>
 #include <vector>
 
 #include <finufft.h>   // single + double precision public API
@@ -138,6 +140,71 @@ void __real_grid2H(const struct grid_conf_s*, int, const long*, const _Complex f
 void __real_rolloff_correction      (float, float, float, const long[3], _Complex float*);
 void __real_apply_rolloff_correction(float, float, float, int, const long*, _Complex float*, const _Complex float*);
 void __real_apply_rolloff_correction2(float, float, float, int, const long*, const long*, _Complex float*, const long*, const _Complex float*);
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// FINUFFT plan cache
+//
+// Plans are keyed by (traj_ptr, type, ndim, Nx, Ny, Nz, n_transf).
+// Using the raw trajectory pointer as part of the key is safe because:
+//  • bartorch keeps the trajectory tensor alive in BartLinopHandle::kept_ for
+//    the lifetime of the linop, so the pointer is stable.
+//  • BartLinopHandle's destructor calls bartorch_finufft_invalidate_traj()
+//    (declared in lib_ops.cpp / lib_shim.c) before freeing the tensor, so stale
+//    entries are removed before the pointer can be reused by a new allocation.
+//
+// Cache hit path: skip makeplan + setpts + destroy — only execute.
+// Cache miss path: makeplan + setpts + execute, then cache the plan.
+// ─────────────────────────────────────────────────────────────────────────────
+struct FinufftPlanKey {
+    const void* traj_ptr;   // raw data pointer of the BART trajectory buffer
+    long        Nx, Ny, Nz; // uniform grid dims (oversampled)
+    long        n_transf;   // batch size (coils × …)
+    int         type;       // 1 (grid2/adjoint) or 2 (grid2H/forward)
+    int         ndim;       // spatial dimensionality (1, 2, or 3)
+
+    bool operator==(const FinufftPlanKey& o) const noexcept
+    {
+        return traj_ptr == o.traj_ptr
+            && Nx == o.Nx && Ny == o.Ny && Nz == o.Nz
+            && n_transf == o.n_transf && type == o.type && ndim == o.ndim;
+    }
+};
+
+struct FinufftPlanKeyHash {
+    std::size_t operator()(const FinufftPlanKey& k) const noexcept
+    {
+        // FNV-like combination
+        std::size_t h = std::hash<const void*>{}(k.traj_ptr);
+        h ^= std::hash<long>{}(k.Nx)       * 0x9e3779b97f4a7c15ULL;
+        h ^= std::hash<long>{}(k.Ny)       * 0x6c62272e07bb0142ULL;
+        h ^= std::hash<long>{}(k.Nz)       * 0x94d049bb133111ebULL;
+        h ^= std::hash<long>{}(k.n_transf) * 0xbf58476d1ce4e5b9ULL;
+        h ^= std::hash<int> {}(k.type)     * 0x517cc1b727220a95ULL;
+        h ^= std::hash<int> {}(k.ndim)     * 0xc4ceb9fe1a85ec53ULL;
+        return h;
+    }
+};
+
+static std::mutex s_plan_cache_mutex;
+static std::unordered_map<FinufftPlanKey, finufftf_plan, FinufftPlanKeyHash>
+    s_plan_cache;
+
+/// Remove all cache entries whose traj_ptr matches @p ptr.
+/// Called from BartLinopHandle's destructor before the trajectory tensor is
+/// freed, so the address cannot be reused by a new allocation while stale
+/// entries remain in the cache.
+extern "C" void bartorch_finufft_invalidate_traj(const void* ptr)
+{
+    std::unique_lock<std::mutex> lk(s_plan_cache_mutex);
+    for (auto it = s_plan_cache.begin(); it != s_plan_cache.end(); ) {
+        if (it->first.traj_ptr == ptr) {
+            finufftf_destroy(it->second);
+            it = s_plan_cache.erase(it);
+        } else {
+            ++it;
+        }
+    }
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -244,43 +311,56 @@ extern "C" void __wrap_grid2(
 
     if (M == 0 || n_transf == 0) return;
 
-    // Extract and scale trajectory
-    std::vector<float> xj, yj, zj;
-    extract_coords(M, trj_dims, traj, grid_dims, conf->os, ndim, xj, yj, zj);
+    // ── Plan cache lookup ────────────────────────────────────────────────────
+    // Key on the raw trajectory pointer: stable because BartLinopHandle keeps
+    // the tensor alive and invalidates the cache entry on destruction.
+    const FinufftPlanKey key{ traj_c, Nx, Ny, Nz, n_transf, 1, ndim };
 
-    // Zero the output: BART's caller may not clear dst before calling grid2
-    std::memset(dst, 0,
-        static_cast<std::size_t>(n_transf * N_spatial) * sizeof(FC));
-
-    // Configure FINUFFT
     finufft_opts opts;
     finufftf_default_opts(&opts);
-    opts.spreadinterponly = 1;    // spreading only — no FFT, no deconvolution
-    // upsampfac controls the ES kernel width (nspread), NOT the actual grid
-    // oversampling.  In spread-only mode FINUFFT writes directly to the
-    // n_modes-sized grid with no internal upsampling.  Setting 2.0 matches
-    // BART's default os=2.0 regime and yields ~10 spreading points for
-    // tol=1e-6.  conf->os is used separately in coordinate scaling (see
-    // extract_coords); the two parameters are independent.
+    opts.spreadinterponly = 1;
     opts.upsampfac        = 2.0;
     opts.debug            = 0;
     opts.showwarn         = 0;
 
-    // Make plan: type 1 (NU → U), ndim-D, n_transf batches
     finufftf_plan plan = nullptr;
-    int64_t n_modes[3] = { Nx, Ny, Nz };
-    int ier = finufftf_makeplan(
-        1, ndim, n_modes,
-        +1,                          // sign (irrelevant for spread-only)
-        static_cast<int>(n_transf),
-        FINUFFT_GRID_TOL, &plan, &opts);
-    if (ier != 0 || plan == nullptr) return;
+    bool cache_hit     = false;
+    {
+        std::unique_lock<std::mutex> lk(s_plan_cache_mutex);
+        auto it = s_plan_cache.find(key);
+        if (it != s_plan_cache.end()) {
+            plan      = it->second;
+            cache_hit = true;
+        }
+    }
 
-    ier = finufftf_setpts(plan, M, xj.data(),
-        (ndim >= 2) ? yj.data() : nullptr,
-        (ndim >= 3) ? zj.data() : nullptr,
-        0, nullptr, nullptr, nullptr);
-    if (ier != 0) { finufftf_destroy(plan); return; }
+    if (!cache_hit) {
+        // Cache miss: extract coords and make the plan.
+        std::vector<float> xj, yj, zj;
+        extract_coords(M, trj_dims, traj, grid_dims, conf->os, ndim, xj, yj, zj);
+
+        int64_t n_modes[3] = { Nx, Ny, Nz };
+        int ier = finufftf_makeplan(
+            1, ndim, n_modes, +1, static_cast<int>(n_transf),
+            FINUFFT_GRID_TOL, &plan, &opts);
+        if (ier != 0 || plan == nullptr) return;
+
+        ier = finufftf_setpts(plan, M, xj.data(),
+            (ndim >= 2) ? yj.data() : nullptr,
+            (ndim >= 3) ? zj.data() : nullptr,
+            0, nullptr, nullptr, nullptr);
+        if (ier != 0) { finufftf_destroy(plan); return; }
+
+        // Insert into cache.
+        {
+            std::unique_lock<std::mutex> lk(s_plan_cache_mutex);
+            s_plan_cache.emplace(key, plan);
+        }
+    }
+
+    // Zero the output: BART's caller may not clear dst before calling grid2
+    std::memset(dst, 0,
+        static_cast<std::size_t>(n_transf * N_spatial) * sizeof(FC));
 
     // type-1 execute: weights = src (NU k-space input), result = dst (grid output)
     // FINUFFT's C API takes non-const pointers even for read-only operands;
@@ -288,8 +368,6 @@ extern "C" void __wrap_grid2(
     finufftf_execute(plan,
         const_cast<FC*>(src),
         dst);
-
-    finufftf_destroy(plan);
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -338,11 +416,8 @@ extern "C" void __wrap_grid2H(
 
     if (M == 0 || n_transf == 0) return;
 
-    std::vector<float> xj, yj, zj;
-    extract_coords(M, trj_dims, traj, grid_dims, conf->os, ndim, xj, yj, zj);
-
-    // Zero k-space output
-    std::memset(dst, 0, static_cast<std::size_t>(n_transf * M) * sizeof(FC));
+    // ── Plan cache lookup ────────────────────────────────────────────────────
+    const FinufftPlanKey key{ traj_c, Nx, Ny, Nz, n_transf, 2, ndim };
 
     finufft_opts opts;
     finufftf_default_opts(&opts);
@@ -352,19 +427,40 @@ extern "C" void __wrap_grid2H(
     opts.showwarn         = 0;
 
     finufftf_plan plan = nullptr;
-    int64_t n_modes[3] = { Nx, Ny, Nz };
-    int ier = finufftf_makeplan(
-        2, ndim, n_modes,
-        +1,
-        static_cast<int>(n_transf),
-        FINUFFT_GRID_TOL, &plan, &opts);
-    if (ier != 0 || plan == nullptr) return;
+    bool cache_hit     = false;
+    {
+        std::unique_lock<std::mutex> lk(s_plan_cache_mutex);
+        auto it = s_plan_cache.find(key);
+        if (it != s_plan_cache.end()) {
+            plan      = it->second;
+            cache_hit = true;
+        }
+    }
 
-    ier = finufftf_setpts(plan, M, xj.data(),
-        (ndim >= 2) ? yj.data() : nullptr,
-        (ndim >= 3) ? zj.data() : nullptr,
-        0, nullptr, nullptr, nullptr);
-    if (ier != 0) { finufftf_destroy(plan); return; }
+    if (!cache_hit) {
+        std::vector<float> xj, yj, zj;
+        extract_coords(M, trj_dims, traj, grid_dims, conf->os, ndim, xj, yj, zj);
+
+        int64_t n_modes[3] = { Nx, Ny, Nz };
+        int ier = finufftf_makeplan(
+            2, ndim, n_modes, +1, static_cast<int>(n_transf),
+            FINUFFT_GRID_TOL, &plan, &opts);
+        if (ier != 0 || plan == nullptr) return;
+
+        ier = finufftf_setpts(plan, M, xj.data(),
+            (ndim >= 2) ? yj.data() : nullptr,
+            (ndim >= 3) ? zj.data() : nullptr,
+            0, nullptr, nullptr, nullptr);
+        if (ier != 0) { finufftf_destroy(plan); return; }
+
+        {
+            std::unique_lock<std::mutex> lk(s_plan_cache_mutex);
+            s_plan_cache.emplace(key, plan);
+        }
+    }
+
+    // Zero k-space output
+    std::memset(dst, 0, static_cast<std::size_t>(n_transf * M) * sizeof(FC));
 
     // type-2 execute: weights = dst (NU output, will be filled),
     //                 result  = src (uniform grid input, only read)
@@ -372,8 +468,6 @@ extern "C" void __wrap_grid2H(
     finufftf_execute(plan,
         dst,
         const_cast<FC*>(src));
-
-    finufftf_destroy(plan);
 }
 
 // =============================================================================

@@ -58,7 +58,7 @@ extern "C" {
         const long pat_dims[16], const void *pattern,
         const long traj_dims[16], const void *traj,
         const long bas_dims[16],  const void *basis,
-        int use_gpu);
+        int use_cuda);
 
     void bartorch_linop_forward (const struct linop_s *op, void *dst, const void *src);
     void bartorch_linop_adjoint (const struct linop_s *op, void *dst, const void *src);
@@ -71,6 +71,11 @@ extern "C" {
         const long y_dims[16], const void *y);
 
     void bartorch_linop_free(const struct linop_s *op);
+
+    /// Invalidate FINUFFT plan-cache entries whose traj_ptr matches ptr.
+    /// Defined in finufft_grid.cpp; declared here so BartLinopHandle can call
+    /// it at destruction time to prevent use-after-free of trajectory pointers.
+    void bartorch_finufft_invalidate_traj(const void *ptr);
 }
 // misc/types.h (pulled in transitively by BART headers included by lib_shim.c)
 // defines `#define auto __auto_type`.  Since this TU includes no BART headers
@@ -130,8 +135,9 @@ static torch::Tensor to_bart_tensor(torch::Tensor t)
 class BartLinopHandle {
 public:
     BartLinopHandle(const struct linop_s *op,
-                    std::vector<torch::Tensor> kept_alive)
-        : op_(op), kept_(std::move(kept_alive))
+                    std::vector<torch::Tensor> kept_alive,
+                    const void *traj_data_ptr = nullptr)
+        : op_(op), kept_(std::move(kept_alive)), traj_data_ptr_(traj_data_ptr)
     {
         // Extract domain / codomain Fortran dims from BART and convert to
         // C-order shapes for Python consumption.
@@ -144,6 +150,13 @@ public:
 
     ~BartLinopHandle()
     {
+        // Invalidate FINUFFT plan-cache entries for this operator's trajectory
+        // BEFORE freeing the linop and BEFORE the kept_ tensors are destroyed.
+        // This prevents the ABA problem where a new allocation reuses the same
+        // pointer address and incorrectly gets a cache hit with stale setpts.
+        if (traj_data_ptr_)
+            bartorch_finufft_invalidate_traj(traj_data_ptr_);
+
         if (op_) {
             bartorch_linop_free(op_);
             op_ = nullptr;
@@ -225,7 +238,8 @@ public:
 
 private:
     const struct linop_s       *op_;
-    std::vector<torch::Tensor>  kept_;   // keep inputs alive for op_'s lifetime
+    std::vector<torch::Tensor>  kept_;         // keep inputs alive for op_'s lifetime
+    const void                 *traj_data_ptr_; // raw trajectory ptr for cache invalidation
     std::vector<int64_t>        ishape_; // domain shape in C-order
     std::vector<int64_t>        oshape_; // codomain shape in C-order
 };
@@ -252,11 +266,13 @@ private:
  * ksp_shape  K-space output shape in C-order.
  *            - Cartesian: ``(nc, [nz,] ny, nx)`` — matches maps but coil kept,
  *              maps dim set to 1.  Inferred from maps if empty.
- *            - Non-Cartesian: ``(nc, nspokes, nsamples)`` or similar.
+ *            - Non-Cartesian: ``(nc, nspokes, nsamples, 1)`` or similar.
  * pattern_t  Undersampling mask in C-order, optional (None → full k-space).
  * traj_t     Non-Cartesian trajectory in C-order ``(..., 3)``, optional.
  * basis_t    Subspace basis in C-order ``(ncoeff, nt)``, optional.
- * use_gpu    1 to allocate on GPU (requires CUDA build), 0 for CPU (default).
+ * use_cuda   1 to allocate on GPU (requires CUDA build), 0 for CPU.
+ *            When 1 and traj is provided, also enables GPU gridding
+ *            (conf.gpu_gridding=true) so the NUFFT runs on the GPU.
  */
 static py::object create_encoding_op(
     torch::Tensor        maps_t,
@@ -264,7 +280,7 @@ static py::object create_encoding_op(
     py::object           pattern_py,
     py::object           traj_py,
     py::object           basis_py,
-    int                  use_gpu)
+    int                  use_cuda)
 {
     // ── Prepare maps ────────────────────────────────────────────────────────
     maps_t = to_bart_tensor(maps_t);
@@ -346,7 +362,7 @@ static py::object create_encoding_op(
         pat_dims, pattern_t.data_ptr(),   // always non-NULL (all-ones or user mask)
         traj_dims, has_traj  ? traj_t.data_ptr()  : nullptr,
         bas_dims,  has_basis ? basis_t.data_ptr() : nullptr,
-        use_gpu);
+        use_cuda);
 
     if (!op)
         throw std::runtime_error(
@@ -360,7 +376,10 @@ static py::object create_encoding_op(
     if (has_traj)  keep.push_back(traj_t);
     if (has_basis) keep.push_back(basis_t);
 
-    return py::cast(std::make_shared<BartLinopHandle>(op, std::move(keep)));
+    // Record the raw trajectory pointer for FINUFFT plan-cache invalidation.
+    const void *traj_ptr = has_traj ? traj_t.data_ptr() : nullptr;
+
+    return py::cast(std::make_shared<BartLinopHandle>(op, std::move(keep), traj_ptr));
 }
 
 // ---------------------------------------------------------------------------
@@ -396,7 +415,7 @@ void init_lib_ops(py::module_ &m)
         py::arg("pattern")    = py::none(),
         py::arg("traj")       = py::none(),
         py::arg("basis")      = py::none(),
-        py::arg("use_gpu")    = 0,
+        py::arg("use_cuda")   = 0,
         "Create a persistent BART SENSE encoding operator (Cartesian or non-Cartesian).\n\n"
         "Parameters\n----------\n"
         "maps : torch.Tensor\n"
@@ -409,6 +428,7 @@ void init_lib_ops(py::module_ &m)
         "    Non-Cartesian trajectory, C-order ``(..., 3)``.\n"
         "basis : torch.Tensor, optional\n"
         "    Subspace basis, C-order ``(ncoeff, nt)``.\n"
-        "use_gpu : int\n"
-        "    1 to use GPU (requires CUDA build), 0 for CPU (default).\n");
+        "use_cuda : int\n"
+        "    1 to use GPU (requires CUDA build), 0 for CPU (default).\n"
+        "    When 1 and traj is provided, also enables GPU gridding.\n");
 }

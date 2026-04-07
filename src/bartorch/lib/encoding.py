@@ -14,7 +14,7 @@ def encoding_op(
     pattern: torch.Tensor | None = None,
     traj: torch.Tensor | None = None,
     basis: torch.Tensor | None = None,
-    gpu: bool = False,
+    cuda: bool | None = None,
 ) -> BartLinop:
     """Create a persistent BART SENSE encoding operator.
 
@@ -61,9 +61,23 @@ def encoding_op(
         Subspace basis in C-order ``(ncoeff, nt)`` where ``ncoeff`` is the
         number of subspace coefficients and ``nt`` is the number of
         echo/temporal frames.  ``None`` (default) disables subspace projection.
-    gpu : bool, optional
-        If ``True``, allocate the operator on GPU (requires a CUDA build).
-        Default ``False``.
+    cuda : bool or None, optional
+        Device selection for the underlying BART operator:
+
+        * ``None`` (default) — infer from the device of ``maps`` (or ``traj``
+          if provided); CUDA if the tensor is already on GPU, CPU otherwise.
+        * ``True``  — force GPU; requires a CUDA build of bartorch.  For
+          non-Cartesian models this also enables GPU gridding
+          (``pics_config.gpu_gridding = true``) so the NUFFT trajectory is
+          moved to the GPU and the gridding step runs on the CUDA device.
+        * ``False`` — force CPU.
+
+        .. note::
+            Off-resonance correction via time segmentation (B0 field map) is
+            not yet exposed through :func:`encoding_op`.  It requires a
+            separate API wrapper around BART's B0-correction linop, which is
+            not accessible through ``pics_model()``.  This feature is planned
+            for a future release.
 
     Returns
     -------
@@ -94,12 +108,17 @@ def encoding_op(
     # which would fail if the extension hasn't been built yet.
     from bartorch._bartorch_ext import create_encoding_op  # noqa: PLC0415
 
+    # Infer CUDA flag from the input tensor device when cuda=None.
+    if cuda is None:
+        ref = traj if traj is not None else maps
+        cuda = ref.is_cuda
+
     handle = create_encoding_op(
         maps.to(torch.complex64),
         list(ksp_shape) if ksp_shape is not None else [],
         pattern,
         traj,
         basis,
-        1 if gpu else 0,
+        1 if cuda else 0,
     )
     return BartLinop(handle)

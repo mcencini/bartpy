@@ -70,7 +70,8 @@ void bartorch_linop_get_codomain_dims(const struct linop_s *op, long dims[DIMS])
  * traj      : trajectory data (NULL → Cartesian)
  * bas_dims  : subspace basis dimensions (NULL → no subspace projection)
  * basis     : subspace basis data (NULL → no subspace)
- * use_gpu   : non-zero to enable GPU (requires CUDA build)
+ * use_cuda  : non-zero to enable GPU (requires CUDA build); when non-zero AND
+ *             traj is present, also enables GPU gridding (gpu_gridding=true).
  *
  * Returns NULL on failure.
  */
@@ -81,7 +82,7 @@ const struct linop_s *bartorch_create_encoding_op(
 	const long pat_dims[DIMS], const _Complex float *pattern,
 	const long traj_dims[DIMS], const _Complex float *traj,
 	const long bas_dims[DIMS], const _Complex float *basis,
-	int use_gpu)
+	int use_cuda)
 {
 	num_init();
 
@@ -89,7 +90,10 @@ const struct linop_s *bartorch_create_encoding_op(
 	struct nufft_conf_s nuconf = nufft_conf_defaults;
 
 	struct pics_config conf = { 0 };
-	conf.gpu = (bool)use_gpu;
+	conf.gpu = (bool)use_cuda;
+	/* For non-Cartesian + CUDA: also enable gpu_gridding so BART moves the
+	 * trajectory to GPU and wraps the NUFFT via linop_gpu_wrapper. */
+	conf.gpu_gridding = (bool)use_cuda && (NULL != traj);
 	conf.nuconf = (NULL != traj) ? &nuconf : NULL;
 
 	return pics_model(&conf,

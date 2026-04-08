@@ -81,25 +81,25 @@ jobs:
           cache: pip
 
       - name: Install system dependencies (Homebrew)
-        # gcc     — BART's official macOS CI (CC: gcc-mp-14) uses GCC, not Apple
-        #            Clang, because Apple Clang 16 cannot handle the recursive MAP
-        #            macro in bart/src/bart.c ("pasting formed 'main_(', an invalid
-        #            preprocessing token" — a hard preprocessor error, not a warning).
-        #            Homebrew GCC handles the macro correctly and supports _Float32
-        #            natively (GCC >= 7), avoiding all Apple Clang workarounds.
+        # gcc@14  — BART's official macOS CI (bart/.github/workflows/macos-arm.yml)
+        #            uses CC=gcc-mp-14 (MacPorts GCC 14).  GCC 15 introduced a hard
+        #            preprocessor error for invalid token pasting (-Winvalid-token-
+        #            paste) that BART's cppmap.h MAP macro relies on (the sentinel
+        #            NIL_P check causes GCC 15 to reject the expansion even though the
+        #            invalid token is ultimately discarded).  GCC 14 silently accepted
+        #            this, matching BART's own CI behaviour.  We pin to gcc@14 for
+        #            the same reason.  Apple Clang is used for C++ (see Build step).
         # libomp   — OpenMP runtime for FINUFFT C++ spreading (Apple Clang C++
-        #            needs Homebrew libomp; GCC C uses its built-in OpenMP).
+        #            needs Homebrew libomp; GCC 14 C uses its built-in -fopenmp).
         # fftw / openblas — required: BARTORCH_USE_ACCELERATE defaults to OFF so
         #            the build uses OpenBLAS (BLAS/LAPACK) + FFTW3 instead of
         #            Apple Accelerate (which lacks LAPACKE and FFTW3 APIs).
         run: |
-          brew install cmake libomp fftw openblas gcc
-          # Find the Homebrew GCC binary (e.g. gcc-14 or gcc-15) and export it
-          # for the build step.  Homebrew installs versioned binaries only;
-          # /opt/homebrew/bin/gcc is a symlink to Apple's cc, not Homebrew GCC.
-          GCC_BIN=$(ls /opt/homebrew/bin/gcc-* 2>/dev/null | grep -E 'gcc-[0-9]+$' | sort -V | tail -1)
-          if [ -z "${GCC_BIN}" ]; then
-            echo "ERROR: Homebrew GCC not found in /opt/homebrew/bin. Install with: brew install gcc" >&2
+          brew install cmake libomp fftw openblas gcc@14
+          # gcc@14 installs a versioned binary at /opt/homebrew/bin/gcc-14.
+          GCC_BIN=/opt/homebrew/bin/gcc-14
+          if [ ! -x "${GCC_BIN}" ]; then
+            echo "ERROR: Homebrew gcc@14 not found at ${GCC_BIN}. Install with: brew install gcc@14" >&2
             exit 1
           fi
           echo "BARTORCH_GCC=${GCC_BIN}" >> "$GITHUB_ENV"
@@ -111,9 +111,10 @@ jobs:
           # No mkl/mkl-include on macOS: build uses OpenBLAS + FFTW3 (see above).
 
       - name: Build and install bartorch
-        # Use Homebrew GCC as C compiler (CMAKE_C_COMPILER) to match BART's own
-        # macOS CI.  C++ compiler is explicitly set to Apple Clang (clang++) to
-        # maintain PyTorch ABI compatibility (PyTorch uses libc++, not libstdc++).
+        # Use Homebrew GCC 14 as C compiler (CMAKE_C_COMPILER) to match BART's
+        # own macOS CI (bart/.github/workflows/macos-arm.yml: CC=gcc-mp-14).
+        # C++ compiler is explicitly set to Apple Clang (clang++) to maintain
+        # PyTorch ABI compatibility (PyTorch uses libc++, not libstdc++).
         # FFTW_ROOT / OPENBLAS_ROOT point CMake to the Homebrew installs.
         run: |
           FFTW_PREFIX=$(brew --prefix fftw)

@@ -820,23 +820,26 @@ target_compile_options(bart_static PRIVATE
 
 # macOS compile flags for BART C sources.
 #
-# BART's official macOS CI uses GCC as C compiler (CC: gcc-mp-14), not Apple
+# BART's official macOS CI uses GCC 14 as C compiler (CC: gcc-mp-14), not Apple
 # Clang, because:
 #   1. Apple Clang 16 cannot handle the recursive MAP macro in bart/src/bart.c.
 #      `MAP(DENTRY, MAIN_BASE)` causes a hard preprocessor error:
 #      "pasting formed 'main_(', an invalid preprocessing token".
 #      This is NOT suppressible with -Wno-* flags — it is a preprocessor error.
-#   2. GCC handles NESTED() via GNU nested functions (no -fblocks extension).
-#   3. GCC >= 7 natively supports _Float32 — no -D_Float32=float needed.
+#   2. GCC 15 introduced a hard error for invalid token pasting
+#      (-Winvalid-token-paste) that BART's cppmap.h MAP macro also relies on.
+#      GCC 14 silently accepted this (matching BART's own CI), so GCC 14 is
+#      the minimum/maximum tested version for BART builds on macOS.
+#   3. GCC handles NESTED() via GNU nested functions (no -fblocks extension).
+#   4. GCC >= 7 natively supports _Float32 — no -D_Float32=float needed.
 #
 # Recommended macOS build command (matches BART's own CI approach):
-#   GCC=$(ls /opt/homebrew/bin/gcc-* | grep -E 'gcc-[0-9]+$' | sort -V | tail -1)
-#   CMAKE_ARGS="-DCMAKE_C_COMPILER=${GCC}" pip install -e . --no-build-isolation
+#   brew install gcc@14
+#   CMAKE_ARGS="-DCMAKE_C_COMPILER=/opt/homebrew/bin/gcc-14" pip install -e . --no-build-isolation
 #
-# The Apple Clang block below is retained only as a fallback (e.g. for
-# developers who have not installed Homebrew GCC).  It works around most Apple
-# Clang 16 issues, but the MAP ##() error in bart.c will still cause the build
-# to fail.  Use GCC for a working build.
+# The Apple Clang block below is retained only as a fallback.  It works around
+# some Apple Clang 16 issues, but the MAP ##() paste error in bart.c will still
+# cause the build to fail.  Use GCC 14 for a working build.
 if(APPLE AND CMAKE_C_COMPILER_ID STREQUAL "AppleClang")
     # -fblocks: required for NESTED() macro (Block closure syntax on Clang).
     #   On macOS, the Blocks runtime is part of libSystem — no -lBlocksRuntime.

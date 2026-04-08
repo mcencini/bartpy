@@ -16,6 +16,7 @@
 #pragma once
 
 #include <stddef.h>   /* ptrdiff_t, size_t */
+#include <stdio.h>    /* snprintf, sprintf, FILE -- included by real fftw3.h; BART's fft_plan.c depends on it */
 
 #ifdef __cplusplus
 extern "C" {

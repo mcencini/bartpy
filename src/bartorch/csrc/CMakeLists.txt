@@ -6,6 +6,13 @@ project(bartorch_ext LANGUAGES C CXX)
 # ---------------------------------------------------------------------------
 option(USE_CUDA "Build with CUDA support" OFF)
 option(BARTORCH_USE_FINUFFT "Replace BART's Kaiser-Bessel gridder with FINUFFT's optimised ES-kernel spreader" ON)
+# On macOS, the Apple Accelerate vDSP shim can replace Homebrew fftw/openblas for
+# FFT.  However, Apple's vecLib does NOT provide lapacke.h (the LAPACKE C interface),
+# which BART's num/lapack.c requires.  Until a full LAPACKE stub is in place,
+# the default is OFF: the OpenBLAS + real FFTW3f path is used instead, which
+# provides both cblas.h and lapacke.h (brew install fftw openblas).
+# Set to ON only when you also supply LAPACKE headers via a custom include path.
+option(BARTORCH_USE_ACCELERATE "Use Apple Accelerate (vDSP) for BLAS+FFT on macOS (eliminates Homebrew fftw/openblas requirement)" OFF)
 # ---------------------------------------------------------------------------
 # Find PyTorch (libtorch)
 # ---------------------------------------------------------------------------
@@ -257,6 +264,12 @@ foreach(_root ${_py_roots})
     endif()
 endforeach()
 
+# Track which FFT backend is active.
+#   _use_mkl_shim         ON → MKL DFTI shim (mkl_fftw_shim.c)
+#   _use_accelerate_shim  ON → Apple Accelerate vDSP shim (accelerate_fftw_shim.c)
+set(_use_mkl_shim        OFF)
+set(_use_accelerate_shim OFF)
+
 # ── MKL found — use it for CBLAS + FFTW3 (via mkl_fftw_shim) ────────────────
 if(_mkl_include_dir AND _mkl_rt_lib)
     set(CBLAS_INCLUDE_DIR  "${_mkl_include_dir}")
@@ -268,24 +281,173 @@ if(_mkl_include_dir AND _mkl_rt_lib)
     set(FFTW3F_INCLUDE_DIR "${_mkl_include_dir}/fftw")
     set(FFTW3F_LIBRARY     "${_mkl_rt_lib}")
     list(APPEND BART_DEFS USE_MKL)
+    set(_use_mkl_shim ON)
     message(STATUS "BLAS+FFT: MKL (fftwf shim via MKL DFTI)")
     message(STATUS "  headers : ${_mkl_include_dir}")
     message(STATUS "  runtime : ${_mkl_rt_lib}")
-else()
-    # MKL is required — it provides both CBLAS and the FFTW3 compatibility
-    # layer used by BART's FFT routines and FINUFFT.  There is no system
-    # BLAS or FFTW3 fallback: MKL is the only supported backend.
+elseif(APPLE AND BARTORCH_USE_ACCELERATE)
+    # ── Apple Accelerate path (macOS — no Homebrew dependencies required) ────
     #
-    # MKL is co-installed with torch in any standard Python environment.
-    # If this error fires, ensure mkl-include is installed alongside torch:
-    #   pip install mkl mkl-include
-    message(FATAL_ERROR
-        "MKL not found in any Python root (searched: ${_py_roots}).\n"
-        "MKL must be installed in the same Python environment as torch:\n"
-        "  pip install mkl mkl-include\n"
-        "(On a standard `pip install torch` CPU wheel these are pulled in "
-        "automatically as dependencies.)\n"
+    # Accelerate.framework ships with every macOS installation and provides:
+    #   • CBLAS / LAPACK (via vecLib — always available in the SDK)
+    #   • vDSP_DFT_zop_CreateSetup / vDSP_DFT_Execute (single-precision FFT)
+    #   • vDSP_DFT_zop_CreateSetupD / vDSP_DFT_ExecuteD (double-precision FFT)
+    #
+    # BART's fftwf_plan_guru64_dft and FINUFFT's fftwf_plan_many_dft /
+    # fftw_plan_many_dft calls are intercepted by accelerate_fftw_shim.c via
+    # the linker --wrap mechanism and implemented on top of these vDSP APIs.
+    #
+    # The fftw3_stub/fftw3.h header provides the minimal FFTW3 declarations
+    # required for compilation without linking against a real libfftw3f.
+
+    # Locate cblas.h inside the active SDK (should always succeed on macOS).
+    find_path(CBLAS_INCLUDE_DIR NAMES cblas.h
+        HINTS "${CMAKE_OSX_SYSROOT}/System/Library/Frameworks/Accelerate.framework/Versions/A/Frameworks/vecLib.framework/Versions/A/Headers"
+              "${CMAKE_OSX_SYSROOT}/usr/include"
+        NO_DEFAULT_PATH
     )
+    if(NOT CBLAS_INCLUDE_DIR)
+        find_path(CBLAS_INCLUDE_DIR NAMES cblas.h)
+    endif()
+
+    # Locate Accelerate.framework itself (for linking).
+    find_library(CBLAS_LIBRARY NAMES Accelerate)
+
+    if(CBLAS_INCLUDE_DIR AND CBLAS_LIBRARY)
+        # FFTW3 include: point to our stub header (no real fftw3.h needed).
+        set(FFTW3F_INCLUDE_DIR "${CMAKE_CURRENT_SOURCE_DIR}/fftw3_stub")
+        # No external FFTW library; all symbols satisfied by the shim via --wrap.
+        set(FFTW3F_LIBRARY     "")
+        set(_use_accelerate_shim ON)
+        message(STATUS "BLAS+FFT: Apple Accelerate (vDSP shim replaces FFTW3)")
+        message(STATUS "  CBLAS headers  : ${CBLAS_INCLUDE_DIR}")
+        message(STATUS "  Accelerate lib : ${CBLAS_LIBRARY}")
+        message(STATUS "  FFTW3 stub dir : ${FFTW3F_INCLUDE_DIR}")
+    else()
+        message(FATAL_ERROR
+            "BARTORCH_USE_ACCELERATE=ON but Accelerate.framework or cblas.h "
+            "not found in the macOS SDK.  This should never happen on a "
+            "standard macOS installation.  Try:\n"
+            "  xcode-select --install\n"
+            "or disable Accelerate and install fftw+openblas via Homebrew:\n"
+            "  cmake -DBARTORCH_USE_ACCELERATE=OFF ...\n"
+            "  brew install fftw openblas\n"
+        )
+    endif()
+else()
+    # ── Fallback: OpenBLAS (CBLAS + LAPACKE) + real FFTW3f ──────────────────
+    #
+    # Used on macOS (no ARM64 MKL wheels on PyPI) or any system where MKL is
+    # not installed.
+    #
+    # Real FFTW3f handles BART's multi-dimensional howmany (batched) FFTs
+    # correctly without any shim, unlike MKL's partial FFTW3 compat layer.
+    #
+    # NOTE: Windows is currently not supported.  bartorch's shim architecture
+    # (mkl_fftw_shim, finufft_grid, torch_prior) relies on the GNU linker
+    # --wrap mechanism, which is unavailable on Windows (link.exe, lld-link).
+    #
+    # Detection order for each library:
+    #   1. Explicit CMake hint: FFTW_ROOT / OPENBLAS_ROOT (from CMAKE_ARGS)
+    #   2. Homebrew auto-detection on macOS (brew --prefix fftw|openblas)
+    #   3. CMake default system search (standard /usr, /usr/local, pkg-config)
+
+    # ── Collect candidate prefix paths ──────────────────────────────────────
+    set(_fallback_prefixes "")
+
+    # User-supplied hints (highest priority)
+    if(DEFINED FFTW_ROOT)
+        list(APPEND _fallback_prefixes "${FFTW_ROOT}")
+    endif()
+    if(DEFINED OPENBLAS_ROOT)
+        list(APPEND _fallback_prefixes "${OPENBLAS_ROOT}")
+    endif()
+
+    # Homebrew auto-detection (macOS and Linux-with-Homebrew)
+    foreach(_brew_pkg "fftw" "openblas")
+        execute_process(
+            COMMAND brew --prefix "${_brew_pkg}"
+            OUTPUT_VARIABLE _brew_prefix
+            OUTPUT_STRIP_TRAILING_WHITESPACE
+            RESULT_VARIABLE _brew_ret
+            ERROR_QUIET
+        )
+        if(_brew_ret EQUAL 0 AND _brew_prefix)
+            list(APPEND _fallback_prefixes "${_brew_prefix}")
+        endif()
+    endforeach()
+
+    # Common system prefixes
+    list(APPEND _fallback_prefixes "/usr/local" "/usr" "/opt/local")
+
+    # ── Find FFTW3f (single-precision) library and header ───────────────────
+    # Priority 1: explicit prefix search
+    find_path(FFTW3F_INCLUDE_DIR NAMES fftw3.h
+        HINTS ${_fallback_prefixes}
+        PATH_SUFFIXES include
+        NO_DEFAULT_PATH
+    )
+    # Priority 2: CMake default system search
+    if(NOT FFTW3F_INCLUDE_DIR)
+        find_path(FFTW3F_INCLUDE_DIR NAMES fftw3.h)
+    endif()
+
+    find_library(FFTW3F_LIBRARY
+        NAMES fftw3f libfftw3f fftw3f-3
+        HINTS ${_fallback_prefixes}
+        PATH_SUFFIXES lib lib64 lib/x86_64-linux-gnu
+        NO_DEFAULT_PATH
+    )
+    if(NOT FFTW3F_LIBRARY)
+        find_library(FFTW3F_LIBRARY NAMES fftw3f libfftw3f fftw3f-3)
+    endif()
+
+    # ── Find OpenBLAS (cblas.h + lapacke.h + libopenblas) ───────────────────
+    # cblas.h may live under include/ or include/openblas/ depending on the
+    # package.  We search both and set CBLAS_INCLUDE_DIR to the directory that
+    # directly contains cblas.h so that #include <cblas.h> resolves.
+    find_path(CBLAS_INCLUDE_DIR NAMES cblas.h
+        HINTS ${_fallback_prefixes}
+        PATH_SUFFIXES include include/openblas
+        NO_DEFAULT_PATH
+    )
+    if(NOT CBLAS_INCLUDE_DIR)
+        find_path(CBLAS_INCLUDE_DIR NAMES cblas.h
+            PATH_SUFFIXES include include/openblas
+        )
+    endif()
+
+    find_library(CBLAS_LIBRARY
+        NAMES openblas blas
+        HINTS ${_fallback_prefixes}
+        PATH_SUFFIXES lib lib64 lib/x86_64-linux-gnu
+        NO_DEFAULT_PATH
+    )
+    if(NOT CBLAS_LIBRARY)
+        find_library(CBLAS_LIBRARY NAMES openblas blas)
+    endif()
+
+    # ── Validate and report ──────────────────────────────────────────────────
+    if(FFTW3F_INCLUDE_DIR AND FFTW3F_LIBRARY AND CBLAS_INCLUDE_DIR AND CBLAS_LIBRARY)
+        message(STATUS "BLAS+FFT: OpenBLAS + real FFTW3f (no MKL shim needed)")
+        message(STATUS "  FFTW3f headers : ${FFTW3F_INCLUDE_DIR}")
+        message(STATUS "  FFTW3f library : ${FFTW3F_LIBRARY}")
+        message(STATUS "  CBLAS headers  : ${CBLAS_INCLUDE_DIR}")
+        message(STATUS "  CBLAS library  : ${CBLAS_LIBRARY}")
+        # _use_mkl_shim remains OFF: link real libfftw3f, no --wrap needed.
+    else()
+        message(FATAL_ERROR
+            "Neither MKL nor OpenBLAS+FFTW3f found.\n"
+            "Install the required libraries for your platform:\n"
+            "  macOS  : brew install fftw openblas\n"
+            "  Ubuntu : apt-get install libfftw3-dev libopenblas-dev\n"
+            "Or install MKL: pip install mkl mkl-include\n"
+            "\n"
+            "For non-standard install locations, pass prefix hints to CMake:\n"
+            "  CMAKE_ARGS='-DFFTW_ROOT=/path/to/fftw -DOPENBLAS_ROOT=/path/to/openblas' "
+            "pip install -e . --no-build-isolation\n"
+        )
+    endif()
 endif()
 
 # ---------------------------------------------------------------------------
@@ -339,9 +501,65 @@ if(BARTORCH_USE_FINUFFT)
     # Point FINUFFT at the FFTW3 library found above (MKL or system fftw3f).
     # Any non-DEFAULT / non-DOWNLOAD value makes setupFFTW.cmake skip its own
     # CPM/find_package search and use our library directly.
+    #
+    # Accelerate path: FFTW3F_LIBRARY is empty — all fftwf_*/fftw_* symbols
+    # will be satisfied by accelerate_fftw_shim.c via --wrap at final link time.
+    # Passing an empty string (not "DEFAULT" or "DOWNLOAD") makes FINUFFT skip
+    # its own FFTW3 search; finufft_fftlibs is created with no linked libraries.
+    # We inject the Accelerate framework into finufft_fftlibs after add_subdirectory.
     set(FINUFFT_FFTW_LIBRARIES "${FFTW3F_LIBRARY}" CACHE STRING
         "FFTW library used by FINUFFT" FORCE)
     set(FINUFFT_FFTW_SUFFIX "" CACHE STRING "" FORCE)   # no _threads/_omp suffix
+
+    # ── Apple OpenMP setup (must come before add_subdirectory) ───────────────
+    # Apple's Clang does not bundle OpenMP; Homebrew installs libomp into a
+    # keg-only path that CMake's FindOpenMP cannot auto-detect.  We query the
+    # prefix with `brew --prefix libomp` and inject the necessary CXX flags so
+    # FINUFFT's find_package(OpenMP REQUIRED) succeeds for the C++ compiler.
+    #
+    # BART's macOS CI uses GCC as C compiler (CC: gcc-mp-14).  When Homebrew
+    # GCC is also used here (recommended), its built-in OpenMP support is found
+    # automatically by CMake's FindOpenMP — no manual C flags are needed.  Only
+    # the CXX flags (always Apple Clang on macOS for PyTorch ABI compatibility)
+    # require the -Xpreprocessor libomp injection.
+    #
+    # If libomp is absent, FINUFFT OpenMP is disabled (single-threaded fallback).
+    if(APPLE)
+        execute_process(
+            COMMAND brew --prefix libomp
+            OUTPUT_VARIABLE _libomp_prefix
+            OUTPUT_STRIP_TRAILING_WHITESPACE
+            RESULT_VARIABLE _brew_libomp_ret
+            ERROR_QUIET
+        )
+        if(_brew_libomp_ret EQUAL 0 AND EXISTS "${_libomp_prefix}")
+            message(STATUS "Apple OpenMP: libomp found at ${_libomp_prefix}")
+            # Only inject -Xpreprocessor libomp flags for Apple Clang C.
+            # Homebrew GCC has built-in OpenMP (-fopenmp) and must NOT use
+            # -Xpreprocessor (a Clang-specific preprocessor pass-through flag).
+            # OpenMP_C_LIB_NAMES is also left unset for GCC: CMake's FindOpenMP
+            # will auto-detect libgomp for GCC, and bart_static does not link
+            # OpenMP::OpenMP_C at all (no -fopenmp in bart_static's compile
+            # options), so the C OpenMP library name is irrelevant in practice.
+            if(CMAKE_C_COMPILER_ID STREQUAL "AppleClang")
+                set(OpenMP_C_FLAGS
+                    "-Xpreprocessor -fopenmp -I${_libomp_prefix}/include"
+                    CACHE STRING "" FORCE)
+                set(OpenMP_C_LIB_NAMES   "omp" CACHE STRING   "" FORCE)
+            endif()
+            # C++ compiler on macOS is always Apple Clang (PyTorch ABI compat).
+            set(OpenMP_CXX_FLAGS
+                "-Xpreprocessor -fopenmp -I${_libomp_prefix}/include"
+                CACHE STRING "" FORCE)
+            set(OpenMP_CXX_LIB_NAMES "omp" CACHE STRING   "" FORCE)
+            set(OpenMP_omp_LIBRARY
+                "${_libomp_prefix}/lib/libomp.dylib"
+                CACHE FILEPATH "" FORCE)
+        else()
+            message(STATUS "Apple OpenMP: libomp not found via brew — FINUFFT will run single-threaded")
+            set(FINUFFT_USE_OPENMP OFF CACHE BOOL "" FORCE)
+        endif()
+    endif()
 
     # ── Build FINUFFT as a subproject ────────────────────────────────────────
     add_subdirectory("${_finufft_dir}" finufft_build EXCLUDE_FROM_ALL)
@@ -350,6 +568,12 @@ if(BARTORCH_USE_FINUFFT)
     # Inject the FFTW3 include dir so all FINUFFT compilation units find fftw3.h.
     # This must come AFTER add_subdirectory so the target already exists.
     target_include_directories(finufft_fftlibs INTERFACE "${FFTW3F_INCLUDE_DIR}")
+
+    # Accelerate path: inject Accelerate framework so FINUFFT gets CBLAS/vDSP
+    # at link time (the fftw symbols are intercepted by --wrap, not from Accelerate).
+    if(_use_accelerate_shim)
+        target_link_libraries(finufft_fftlibs INTERFACE "${CBLAS_LIBRARY}")
+    endif()
 
     message(STATUS "FINUFFT: enabled — FFTW backend: ${FFTW3F_LIBRARY}")
 endif()
@@ -495,8 +719,8 @@ file(GLOB _bart_sake_srcs    "${BART_SRC_DIR}/sake/*.c")
 file(GLOB _bart_geom_srcs    "${BART_SRC_DIR}/geom/*.c")
 file(GLOB _bart_seq_srcs     "${BART_SRC_DIR}/seq/*.c")
 file(GLOB _bart_stl_srcs     "${BART_SRC_DIR}/stl/*.c")
-# Top-level tool files: each bart/src/<tool>.c provides main_<tool>()
-# as well as the main dispatcher (bart.c) and entry-point wrapper (main.c).
+# Top-level tool files: each bart/src/<tool>.c provides main_<tool>().
+# Also includes bart.c (provides bart_command()) and bbox.c/main.c (excluded below).
 file(GLOB _bart_tools_srcs   "${BART_SRC_DIR}/*.c")
 
 # CUDA device-code sources — only included when USE_CUDA=ON.
@@ -513,17 +737,27 @@ else()
     set(_bart_noncart_cu_srcs "")
 endif()
 
-# Exclude files that require external optional libraries without #ifdef guards:
+# Exclude files that require external optional libraries without #ifdef guards,
+# or that conflict with our library build:
 #
 # ismrmrd.c       — includes ismrm/read.h → ismrmrd/ismrmrd.h (libismrmrd).
 #                   BART's Makefile only adds this when ISMRM_BASE is set.
 # ismrm/read.c    — same reason (libismrmrd).
-# win/*.c         — Windows POSIX compatibility shims (mmap, fmemopen) that
-#                   redefine POSIX functions already present on Linux/macOS.
-# lapacke/*.c     — BART's bundled LAPACKE shim: requires system lapack.h.
-#                   With MKL (USE_MKL=1) LAPACKE is provided by libmkl_rt.so;
-#                   we don't need the bundled implementation.
-list(REMOVE_ITEM _bart_tools_srcs "${BART_SRC_DIR}/ismrmrd.c")
+# win/*.c         — Windows POSIX compatibility shims (mmap/shm_open,
+#                   fmemopen).  Absent on Linux/macOS; added below for WIN32.
+# lapacke/*.c     — BART's bundled LAPACKE shim: not needed when LAPACKE is
+#                   provided by MKL (USE_MKL=1) or OpenBLAS.
+# main.c          — defines int main() which conflicts in a shared library.
+# bbox.c          — does `#define main_bart main_bbox; #include "bart.c"`.
+#                   This re-include causes Apple Clang to fail on the MAP macro
+#                   sentinel (##()) in bart.c's dispatch_table.  The bbox tool
+#                   is not registered in mainlist.inc so excluding it here has
+#                   no functional impact on bart_command().
+list(REMOVE_ITEM _bart_tools_srcs
+    "${BART_SRC_DIR}/ismrmrd.c"
+    "${BART_SRC_DIR}/main.c"
+    "${BART_SRC_DIR}/bbox.c"
+)
 
 set(BART_SOURCES
     ${_bart_misc_srcs}
@@ -551,10 +785,24 @@ set(BART_SOURCES
     ${_bart_seq_srcs}
     ${_bart_stl_srcs}
     ${_bart_tools_srcs}
-    # ismrm/read.c is intentionally excluded (requires libismrmrd).
-    # win/*.c is intentionally excluded (Windows-only POSIX shims).
-    # lapacke/*.c is intentionally excluded (MKL provides LAPACKE).
+    # ismrm/read.c intentionally excluded (requires libismrmrd).
+    # win/*.c added below for WIN32.
+    # lapacke/*.c not needed (LAPACKE provided by MKL or OpenBLAS).
 )
+
+# On Windows (if ever revisited), include POSIX compatibility shims that
+# provide mmap/munmap/shm_open (mman.c) and fmemopen (fmemopen.c).  These
+# are used by BART's I/O layer but absent from the Win32 API.
+# NOTE: Windows is not currently supported due to --wrap linker limitations.
+#       These sources are included here to avoid compile errors when someone
+#       attempts a Windows build and to ease a future port.
+if(WIN32)
+    list(APPEND BART_SOURCES
+        "${BART_SRC_DIR}/win/mman.c"
+        "${BART_SRC_DIR}/win/fmemopen.c"
+    )
+    message(STATUS "Windows: adding win/mman.c and win/fmemopen.c (POSIX shims)")
+endif()
 
 add_library(bart_static STATIC ${BART_SOURCES})
 target_compile_definitions(bart_static PUBLIC ${BART_DEFS})
@@ -565,13 +813,55 @@ target_include_directories(bart_static PUBLIC
     ${CBLAS_INCLUDE_DIR}
 )
 target_compile_options(bart_static PRIVATE
-    $<$<COMPILE_LANGUAGE:C>:-fPIC -O2 -std=gnu11>
+    $<$<COMPILE_LANGUAGE:C>:-fPIC -O2 -std=gnu17>
     $<$<COMPILE_LANGUAGE:CXX>:-fPIC -O2>
     $<$<COMPILE_LANGUAGE:CUDA>:-O2 --generate-code arch=compute_${CMAKE_CUDA_ARCHITECTURES},code=sm_${CMAKE_CUDA_ARCHITECTURES}>
 )
 
-# Link order: PyTorch → MKL (covers both CBLAS and the fftwf_* symbols that
-# mkl_fftw_shim.c intercepts).  FFTW3F_LIBRARY == CBLAS_LIBRARY == libmkl_rt.
+# macOS compile flags for BART C sources.
+#
+# BART's official macOS CI uses GCC 14 as C compiler (CC: gcc-mp-14), not Apple
+# Clang, because:
+#   1. Apple Clang 16 cannot handle the recursive MAP macro in bart/src/bart.c.
+#      `MAP(DENTRY, MAIN_BASE)` causes a hard preprocessor error:
+#      "pasting formed 'main_(', an invalid preprocessing token".
+#      This is NOT suppressible with -Wno-* flags — it is a preprocessor error.
+#   2. GCC 15 introduced a hard error for invalid token pasting
+#      (-Winvalid-token-paste) that BART's cppmap.h MAP macro also relies on.
+#      GCC 14 silently accepted this (matching BART's own CI), so GCC 14 is
+#      the minimum/maximum tested version for BART builds on macOS.
+#   3. GCC handles NESTED() via GNU nested functions (no -fblocks extension).
+#   4. GCC >= 7 natively supports _Float32 — no -D_Float32=float needed.
+#
+# Recommended macOS build command (matches BART's own CI approach):
+#   brew install gcc@14
+#   CMAKE_ARGS="-DCMAKE_C_COMPILER=/opt/homebrew/bin/gcc-14" pip install -e . --no-build-isolation
+#
+# The Apple Clang block below is retained only as a fallback.  It works around
+# some Apple Clang 16 issues, but the MAP ##() paste error in bart.c will still
+# cause the build to fail.  Use GCC 14 for a working build.
+if(APPLE AND CMAKE_C_COMPILER_ID STREQUAL "AppleClang")
+    # -fblocks: required for NESTED() macro (Block closure syntax on Clang).
+    #   On macOS, the Blocks runtime is part of libSystem — no -lBlocksRuntime.
+    # -Wno-implicit-function-declaration / -Wno-int-conversion: suppress Apple
+    #   Clang 16 errors from MAP(DECLMAIN, MAIN_LIST) in main.h (MAP's EXPAND
+    #   provides 128 passes, but MAIN_LIST has ~144 tools so ~16 tools are left
+    #   undeclared).  NOTE: these flags do NOT fix the ##() paste error in
+    #   bart.c — only using GCC resolves that.
+    # _Float32=float: Apple Clang does not support this GCC/C23 optional type.
+    target_compile_options(bart_static PRIVATE
+        $<$<COMPILE_LANGUAGE:C>:
+            -fblocks
+            -Wno-implicit-function-declaration
+            -Wno-int-conversion
+        >
+    )
+    target_compile_definitions(bart_static PRIVATE "_Float32=float")
+endif()
+
+# Link order: PyTorch → math libraries (CBLAS + FFTW3).
+# With MKL: FFTW3F_LIBRARY == CBLAS_LIBRARY == libmkl_rt; both link the same file.
+# With OpenBLAS: CBLAS_LIBRARY = libopenblas, FFTW3F_LIBRARY = libfftw3f.
 target_link_libraries(bart_static PUBLIC
     ${TORCH_LIBRARIES}
     ${CBLAS_LIBRARY}
@@ -618,19 +908,31 @@ else()
 endif()
 
 # ---------------------------------------------------------------------------
-# MKL FFTW3 shim — intercepts fftwf_plan_guru64_dft via --wrap and routes to
-# MKL DFTI.  MKL's FFTW3 compat layer rejects l > 1 howmany dims; DFTI has
-# no such limitation.  The shim requires mkl_dfti.h from the MKL headers.
+# _bartorch_ext Python extension module
 # ---------------------------------------------------------------------------
-pybind11_add_module(_bartorch_ext
+# Core extension sources (compiled on all platforms)
+set(_bartorch_ext_srcs
     bartorch_ext.cpp
     bart_ops.cpp
     torch_prior.cpp
     torch_prior_nlop.c
-    mkl_fftw_shim.c
     lib_shim.c
     lib_ops.cpp
 )
+# MKL FFTW3 shim: only compiled when MKL is the BLAS/FFT backend.
+# When using real FFTW3 (macOS without MKL, MSYS2, etc.) BART's fftwf_* calls
+# resolve directly against libfftw3f — no interception required.
+if(_use_mkl_shim)
+    list(APPEND _bartorch_ext_srcs mkl_fftw_shim.c)
+endif()
+# Accelerate FFTW3 shim: only compiled when Accelerate is the BLAS/FFT backend.
+# Intercepts all fftwf_* and fftw_* calls from BART and FINUFFT and routes them
+# through Apple's vDSP_DFT_Execute / vDSP_DFT_ExecuteD APIs.
+if(_use_accelerate_shim)
+    list(APPEND _bartorch_ext_srcs accelerate_fftw_shim.c)
+endif()
+
+pybind11_add_module(_bartorch_ext ${_bartorch_ext_srcs})
 target_include_directories(_bartorch_ext PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}
     ${BART_SRC_DIR}
@@ -643,31 +945,79 @@ target_link_libraries(_bartorch_ext PRIVATE
 )
 target_compile_definitions(_bartorch_ext PRIVATE ${BART_DEFS})
 
-# --wrap the fftwf_* symbols so mkl_fftw_shim.c intercepts them
-if(APPLE)
+# --wrap the fftwf_* symbols so the active FFT shim intercepts FFTW3 calls.
+#
+# MKL path (_use_mkl_shim):
+#   mkl_fftw_shim.c intercepts BART's fftwf_plan_guru64_dft calls and routes
+#   them through MKL's DFTI API, working around MKL's broken FFTW3 compat layer.
+#   Only BART's symbols are wrapped (FINUFFT resolves fftwf_plan_many_dft
+#   directly against MKL's FFTW3 compat layer, which handles plan_many correctly).
+#
+# Accelerate path (_use_accelerate_shim):
+#   accelerate_fftw_shim.c intercepts ALL fftwf_* and fftw_* calls from both
+#   BART and FINUFFT and routes them through vDSP_DFT_Execute / vDSP_DFT_ExecuteD.
+#   No real libfftw3f is linked.
+#
+# Real FFTW3 path (neither shim):
+#   BART's and FINUFFT's calls resolve directly against libfftw3f — no wrap needed.
+if(_use_mkl_shim)
+    if(APPLE)
+        target_link_options(_bartorch_ext PRIVATE
+            -Wl,-wrap,_fftwf_plan_guru64_dft
+            -Wl,-wrap,_fftwf_execute_dft
+            -Wl,-wrap,_fftwf_destroy_plan
+            -Wl,-wrap,_fftwf_export_wisdom_to_filename
+            -Wl,-wrap,_fftwf_import_wisdom_from_filename
+            -Wl,-wrap,_fftwf_init_threads
+            -Wl,-wrap,_fftwf_plan_with_nthreads
+            -Wl,-wrap,_fftwf_cleanup_threads
+        )
+    else()
+        target_link_options(_bartorch_ext PRIVATE
+            -Wl,--wrap,fftwf_plan_guru64_dft
+            -Wl,--wrap,fftwf_execute_dft
+            -Wl,--wrap,fftwf_destroy_plan
+            -Wl,--wrap,fftwf_export_wisdom_to_filename
+            -Wl,--wrap,fftwf_import_wisdom_from_filename
+            -Wl,--wrap,fftwf_init_threads
+            -Wl,--wrap,fftwf_plan_with_nthreads
+            -Wl,--wrap,fftwf_cleanup_threads
+        )
+    endif()
+    message(STATUS "FFTW shim: --wrap fftwf_plan_guru64_dft active (MKL DFTI backend)")
+elseif(_use_accelerate_shim)
+    # Apple ld: Mach-O symbols are prefixed with '_' in the --wrap argument.
+    # Wrap float precision (BART + FINUFFT float path):
     target_link_options(_bartorch_ext PRIVATE
         -Wl,-wrap,_fftwf_plan_guru64_dft
+        -Wl,-wrap,_fftwf_plan_many_dft
         -Wl,-wrap,_fftwf_execute_dft
         -Wl,-wrap,_fftwf_destroy_plan
         -Wl,-wrap,_fftwf_export_wisdom_to_filename
         -Wl,-wrap,_fftwf_import_wisdom_from_filename
+        -Wl,-wrap,_fftwf_forget_wisdom
+        -Wl,-wrap,_fftwf_cleanup
         -Wl,-wrap,_fftwf_init_threads
         -Wl,-wrap,_fftwf_plan_with_nthreads
         -Wl,-wrap,_fftwf_cleanup_threads
     )
-else()
+    # Wrap double precision (FINUFFT double cleanup path):
     target_link_options(_bartorch_ext PRIVATE
-        -Wl,--wrap,fftwf_plan_guru64_dft
-        -Wl,--wrap,fftwf_execute_dft
-        -Wl,--wrap,fftwf_destroy_plan
-        -Wl,--wrap,fftwf_export_wisdom_to_filename
-        -Wl,--wrap,fftwf_import_wisdom_from_filename
-        -Wl,--wrap,fftwf_init_threads
-        -Wl,--wrap,fftwf_plan_with_nthreads
-        -Wl,--wrap,fftwf_cleanup_threads
+        -Wl,-wrap,_fftw_plan_many_dft
+        -Wl,-wrap,_fftw_execute_dft
+        -Wl,-wrap,_fftw_destroy_plan
+        -Wl,-wrap,_fftw_forget_wisdom
+        -Wl,-wrap,_fftw_cleanup
+        -Wl,-wrap,_fftw_init_threads
+        -Wl,-wrap,_fftw_plan_with_nthreads
+        -Wl,-wrap,_fftw_cleanup_threads
     )
+    # Link Accelerate framework (provides CBLAS/vecLib; vDSP used in shim).
+    target_link_libraries(_bartorch_ext PRIVATE "${CBLAS_LIBRARY}")
+    message(STATUS "FFTW shim: --wrap fftwf_*/fftw_* active (Apple Accelerate vDSP backend)")
+else()
+    message(STATUS "FFTW: real libfftw3f linked directly (no shim required)")
 endif()
-message(STATUS "FFTW shim: --wrap fftwf_plan_guru64_dft (MKL DFTI backend)")
 
 if(BARTORCH_USE_FINUFFT)
     # finufft_grid.cpp provides __wrap_grid2 / __wrap_grid2H.

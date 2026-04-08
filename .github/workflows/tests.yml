@@ -11,21 +11,17 @@ env:
 
 jobs:
   # -------------------------------------------------------------------------
-  # Full test suite — builds the C++ extension (BART embedded) and runs all
-  # tests.  MKL (from mkl/mkl-include Python packages) provides BLAS and FFT.
-  # MKL is detected automatically from torch's install location — no system
-  # BLAS or FFTW3 packages required.
-  #
-  # macOS uses macos-13 (Intel) because MKL has no ARM64 (Apple Silicon)
-  # wheels on PyPI.  macos-latest is ARM64 and would fail at `pip install mkl`.
+  # Linux tests — MKL backend (pip install mkl mkl-include)
   # -------------------------------------------------------------------------
-  tests:
+  tests-linux:
+    name: Tests (Linux, Python ${{ matrix.python-version }})
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest]
         python-version: ["3.10", "3.11", "3.12"]
-    runs-on: ${{ matrix.os }}
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
 
     steps:
       - uses: actions/checkout@v4
@@ -40,26 +36,102 @@ jobs:
           python-version: ${{ matrix.python-version }}
           cache: pip
 
-      - name: Install system dependencies (Linux)
-        if: runner.os == 'Linux'
+      - name: Install system dependencies
         run: sudo apt-get install -y cmake
 
-      - name: Install system dependencies (macOS)
-        if: runner.os == 'macOS'
-        run: brew install cmake
-
       - name: Install Python build dependencies
-        # Using --no-build-isolation means pip will NOT auto-install
-        # [build-system].requires, so we install them explicitly here.
-        # mkl + mkl-include are declared in pyproject.toml [build-system].requires;
-        # torch CPU wheel from the WHL index does not bundle MKL.
         run: |
           pip install scikit-build-core pybind11 numpy pytest
           pip install torch --index-url https://download.pytorch.org/whl/cpu
           pip install mkl mkl-include
 
-      - name: Build and install bartorch (compiles C++ extension with BART)
+      - name: Build and install bartorch
         run: pip install -e . --no-build-isolation
 
       - name: Run full test suite
         run: pytest tests/ -v
+
+  # -------------------------------------------------------------------------
+  # macOS tests — OpenBLAS + FFTW3 backend (no MKL on ARM64)
+  #
+  # Uses macos-latest (ARM64 Apple Silicon).  MKL has no ARM64 wheels on PyPI,
+  # so the build falls back to Homebrew-installed OpenBLAS + FFTW3.
+  # -------------------------------------------------------------------------
+  tests-macos:
+    name: Tests (macOS, Python ${{ matrix.python-version }})
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.11", "3.12"]
+    runs-on: macos-latest
+    permissions:
+      contents: read
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: false
+
+      - name: Initialize submodules
+        run: git submodule update --init --recursive
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+          cache: pip
+
+      - name: Install system dependencies (Homebrew)
+        # gcc@14  — BART's official macOS CI (bart/.github/workflows/macos-arm.yml)
+        #            uses CC=gcc-mp-14 (MacPorts GCC 14).  GCC 15 introduced a hard
+        #            preprocessor error for invalid token pasting (-Winvalid-token-
+        #            paste) that BART's cppmap.h MAP macro relies on (the sentinel
+        #            NIL_P check causes GCC 15 to reject the expansion even though the
+        #            invalid token is ultimately discarded).  GCC 14 silently accepted
+        #            this, matching BART's own CI behaviour.  We pin to gcc@14 for
+        #            the same reason.  Apple Clang is used for C++ (see Build step).
+        # libomp   — OpenMP runtime for FINUFFT C++ spreading (Apple Clang C++
+        #            needs Homebrew libomp; GCC 14 C uses its built-in -fopenmp).
+        # fftw / openblas — required: BARTORCH_USE_ACCELERATE defaults to OFF so
+        #            the build uses OpenBLAS (BLAS/LAPACK) + FFTW3 instead of
+        #            Apple Accelerate (which lacks LAPACKE and FFTW3 APIs).
+        run: |
+          brew install cmake libomp fftw openblas gcc@14
+          # gcc@14 installs a versioned binary at /opt/homebrew/bin/gcc-14.
+          GCC_BIN=/opt/homebrew/bin/gcc-14
+          if [ ! -x "${GCC_BIN}" ]; then
+            echo "ERROR: Homebrew gcc@14 not found at ${GCC_BIN}. Install with: brew install gcc@14" >&2
+            exit 1
+          fi
+          echo "BARTORCH_GCC=${GCC_BIN}" >> "$GITHUB_ENV"
+
+      - name: Install Python build dependencies
+        run: |
+          pip install scikit-build-core pybind11 numpy pytest
+          pip install torch --index-url https://download.pytorch.org/whl/cpu
+          # No mkl/mkl-include on macOS: build uses OpenBLAS + FFTW3 (see above).
+
+      - name: Build and install bartorch
+        # Use Homebrew GCC 14 as C compiler (CMAKE_C_COMPILER) to match BART's
+        # own macOS CI (bart/.github/workflows/macos-arm.yml: CC=gcc-mp-14).
+        # C++ compiler is explicitly set to Apple Clang (clang++) to maintain
+        # PyTorch ABI compatibility (PyTorch uses libc++, not libstdc++).
+        # FFTW_ROOT / OPENBLAS_ROOT point CMake to the Homebrew installs.
+        run: |
+          FFTW_PREFIX=$(brew --prefix fftw)
+          OPENBLAS_PREFIX=$(brew --prefix openblas)
+          CMAKE_ARGS="-DFFTW_ROOT=${FFTW_PREFIX} -DOPENBLAS_ROOT=${OPENBLAS_PREFIX} -DCMAKE_C_COMPILER=${BARTORCH_GCC} -DCMAKE_CXX_COMPILER=$(xcrun -f clang++)" \
+            pip install -e . --no-build-isolation
+
+      - name: Run full test suite
+        run: pytest tests/ -v
+
+  # -------------------------------------------------------------------------
+  # Windows support is deferred.
+  #
+  # bartorch's shim architecture (mkl_fftw_shim, finufft_grid, torch_prior,
+  # cufinufft_grid) relies on the GNU linker's --wrap mechanism to intercept
+  # symbol calls at link time.  Windows linkers (link.exe, lld-link) do not
+  # support --wrap, making the current architecture fundamentally incompatible
+  # with Windows without a major redesign.
+  # -------------------------------------------------------------------------
+

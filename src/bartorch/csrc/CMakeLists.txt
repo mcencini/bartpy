@@ -802,9 +802,38 @@ target_compile_options(bart_static PRIVATE
     $<$<COMPILE_LANGUAGE:CUDA>:-O2 --generate-code arch=compute_${CMAKE_CUDA_ARCHITECTURES},code=sm_${CMAKE_CUDA_ARCHITECTURES}>
 )
 
-# Apple Clang does not support _Float32 (a GCC/C23 extension used in
-# bart/src/stl/misc.c).  Define it to float so the struct definition compiles.
+# Apple Clang-specific compile flags — mirrors BART's own Makefile logic:
+#
+#   ifeq ($(findstring clang,$(CC)),clang)
+#     CFLAGS += -fblocks
+#     LDFLAGS += -lBlocksRuntime
+#   ...
+#
+# 1. -fblocks: required for the NESTED() macro in bart/src/misc/nested.h.
+#    On Clang, NESTED(RET, NAME, ARGS) expands to a Block closure ^ARGS which
+#    requires the Blocks extension.  Files affected include num/optimize.c,
+#    iter/iter2.c, motion/interpolate.c, noncart/grid.c, simu/simulation.c etc.
+#    On macOS, the Blocks runtime is part of libSystem — no -lBlocksRuntime needed.
+#
+# 2. -Wno-implicit-function-declaration / -Wno-int-conversion: BART's
+#    bart/src/misc/cppmap.h EXPAND macro provides 128 scan passes.  MAIN_LIST
+#    in mainlist.inc has ~144 tools; the MAP macro needs 3 passes per tool, so
+#    tools beyond position ~42 are not fully forward-declared by
+#    MAP(DECLMAIN, MAIN_LIST) in main.h.  Apple Clang 16 promotes both
+#    -Wimplicit-function-declaration and -Wint-conversion to hard errors by
+#    default, causing a build failure in bart.c's dispatch table.  Suppressing
+#    them restores the GCC-compatible build behaviour.
+#
+# 3. _Float32=float: Apple Clang does not support the GCC/C23 optional type
+#    _Float32 used in bart/src/stl/misc.c.
 if(APPLE)
+    target_compile_options(bart_static PRIVATE
+        $<$<COMPILE_LANGUAGE:C>:
+            -fblocks
+            -Wno-implicit-function-declaration
+            -Wno-int-conversion
+        >
+    )
     target_compile_definitions(bart_static PRIVATE "_Float32=float")
 endif()
 

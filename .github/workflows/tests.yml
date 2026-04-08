@@ -83,20 +83,21 @@ jobs:
       - name: Install system dependencies (Homebrew)
         # libomp   — OpenMP runtime for FINUFFT multi-threaded spreading.
         #            CMakeLists.txt calls `brew --prefix libomp` to auto-detect it.
-        # fftw / openblas — only needed when BARTORCH_USE_ACCELERATE=OFF (not the
-        #            default). Kept here as a convenience for non-default builds.
+        # fftw / openblas — required: BARTORCH_USE_ACCELERATE defaults to OFF so
+        #            the build uses OpenBLAS (BLAS/LAPACK) + FFTW3 instead of
+        #            Apple Accelerate (which lacks LAPACKE and FFTW3 APIs).
         run: brew install cmake libomp fftw openblas
 
       - name: Install Python build dependencies
         run: |
           pip install scikit-build-core pybind11 numpy pytest
           pip install torch --index-url https://download.pytorch.org/whl/cpu
-          # No mkl/mkl-include on macOS: default path uses Apple Accelerate.
+          # No mkl/mkl-include on macOS: build uses OpenBLAS + FFTW3 (see above).
 
       - name: Build and install bartorch
-        # Default macOS path: BARTORCH_USE_ACCELERATE=ON (Accelerate.framework).
-        # FFTW_ROOT / OPENBLAS_ROOT are passed as fallback hints for the non-
-        # default BARTORCH_USE_ACCELERATE=OFF path; they are harmless otherwise.
+        # Default macOS path: BARTORCH_USE_ACCELERATE=OFF — uses OpenBLAS + FFTW3.
+        # Apple Accelerate lacks LAPACKE (lapacke.h) and FFTW3, so it is not the
+        # default.  FFTW_ROOT / OPENBLAS_ROOT point CMake to the Homebrew installs.
         # OpenMP is detected automatically from Homebrew libomp inside CMakeLists.txt.
         run: |
           FFTW_PREFIX=$(brew --prefix fftw)

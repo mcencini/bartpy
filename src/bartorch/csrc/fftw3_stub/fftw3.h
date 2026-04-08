@@ -83,7 +83,7 @@ void fftwf_plan_with_nthreads(int nthreads);
 void fftwf_cleanup_threads(void);
 
 /* --- Double-precision (fftw_*) function declarations ---------------------- */
-/* Used by Finufft_FFT_plan<double> (cleanup/forget_wisdom path) and for   */
+/* Used by FINUFFT_FFT_plan<double> (cleanup/forget_wisdom path) and for   */
 /* double-precision FINUFFT plans (if ever requested).                       */
 
 fftw_plan fftw_plan_many_dft(

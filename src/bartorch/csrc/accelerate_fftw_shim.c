@@ -406,8 +406,8 @@ static _bt_plan *_plan_create_common(uint8_t precision,
             if (!s) {
                 fprintf(stderr,
                     "bartorch accelerate_fftw_shim: vDSP_DFT_zop_CreateSetup "
-                    "failed for N=%lu (must be f*2^n, fin{1,3,5,15}).\n",
-                    (unsigned long)N);
+                    "failed for N=%zu (must be f*2^n, fin{1,3,5,15}).\n",
+                    (size_t)N);
                 goto fail;
             }
             plan->setups[d] = (void *)s;
@@ -416,8 +416,8 @@ static _bt_plan *_plan_create_common(uint8_t precision,
             if (!s) {
                 fprintf(stderr,
                     "bartorch accelerate_fftw_shim: vDSP_DFT_zop_CreateSetupD "
-                    "failed for N=%lu (must be f*2^n, fin{1,3,5,15}).\n",
-                    (unsigned long)N);
+                    "failed for N=%zu (must be f*2^n, fin{1,3,5,15}).\n",
+                    (size_t)N);
                 goto fail;
             }
             plan->setups[d] = (void *)s;
@@ -699,15 +699,23 @@ void *__wrap_fftwf_plan_guru64_dft(
 
     if (k <= 0) return NULL;
 
-    /* Extract per-dimension info */
-    long lengths[k], istrides[k], ostrides[k];
+    /* Extract per-dimension info -- heap-allocate to avoid VLA stack risk */
+    long *lengths  = (long *)malloc((size_t)k * sizeof(long));
+    long *istrides = (long *)malloc((size_t)k * sizeof(long));
+    long *ostrides = (long *)malloc((size_t)k * sizeof(long));
+    int   nhm      = (l > 0) ? l : 1;
+    _bt_hmdim *hm  = (_bt_hmdim *)malloc((size_t)nhm * sizeof(_bt_hmdim));
+    if (!lengths || !istrides || !ostrides || !hm) {
+        free(lengths); free(istrides); free(ostrides); free(hm);
+        return NULL;
+    }
+
     for (int d = 0; d < k; d++) {
         lengths[d]  = (long)dims[d].n;
         istrides[d] = (long)dims[d].is;
         ostrides[d] = (long)dims[d].os;
     }
 
-    _bt_hmdim hm[l > 0 ? l : 1];
     for (int i = 0; i < l; i++) {
         hm[i].n  = (long)hmdims[i].n;
         hm[i].is = (long)hmdims[i].is;
@@ -716,9 +724,11 @@ void *__wrap_fftwf_plan_guru64_dft(
 
     vDSP_DFT_Direction dir = (sign == -1) ? vDSP_DFT_FORWARD : vDSP_DFT_INVERSE;
 
-    return (void *)_plan_create_common(PLAN_FLOAT, k,
-                                       lengths, istrides, ostrides,
-                                       l, hm, dir);
+    void *plan = (void *)_plan_create_common(PLAN_FLOAT, k,
+                                             lengths, istrides, ostrides,
+                                             l, hm, dir);
+    free(lengths); free(istrides); free(ostrides); free(hm);
+    return plan;
 }
 
 /*
@@ -754,9 +764,15 @@ void *__wrap_fftwf_plan_many_dft(
 
     if (rank <= 0) return NULL;
 
-    /* Compute C-order strides for transform dims */
-    long lengths[rank], istrides_a[rank], ostrides_a[rank];
-    long istr = (long)istride, ostr = (long)ostride;
+    /* Compute C-order strides for transform dims -- heap-allocate to avoid VLA stack risk */
+    long *lengths    = (long *)malloc((size_t)rank * sizeof(long));
+    long *istrides_a = (long *)malloc((size_t)rank * sizeof(long));
+    long *ostrides_a = (long *)malloc((size_t)rank * sizeof(long));
+    if (!lengths || !istrides_a || !ostrides_a) {
+        free(lengths); free(istrides_a); free(ostrides_a);
+        return NULL;
+    }
+
     /* istr for innermost (last) dim; outer dims multiply */
     long isuffix = (long)istride;
     long osuffix = (long)ostride;
@@ -769,20 +785,21 @@ void *__wrap_fftwf_plan_many_dft(
             osuffix *= (long)n[d];
         }
     }
-    (void)istr; (void)ostr;
 
-    _bt_hmdim hm[1];
-    hm[0].n  = (long)howmany;
-    hm[0].is = (long)idist;
-    hm[0].os = (long)odist;
+    _bt_hmdim hm;
+    hm.n  = (long)howmany;
+    hm.is = (long)idist;
+    hm.os = (long)odist;
     /* When howmany == 1 there is no howmany loop; suppress by setting l=0. */
     int l = (howmany > 1) ? 1 : 0;
 
     vDSP_DFT_Direction dir = (sign == -1) ? vDSP_DFT_FORWARD : vDSP_DFT_INVERSE;
 
-    return (void *)_plan_create_common(PLAN_FLOAT, rank,
-                                       lengths, istrides_a, ostrides_a,
-                                       l, hm, dir);
+    void *plan = (void *)_plan_create_common(PLAN_FLOAT, rank,
+                                             lengths, istrides_a, ostrides_a,
+                                             l, &hm, dir);
+    free(lengths); free(istrides_a); free(ostrides_a);
+    return plan;
 }
 
 void __wrap_fftwf_execute_dft(void *_plan, float _Complex *in, float _Complex *out)
@@ -850,7 +867,15 @@ void *__wrap_fftw_plan_many_dft(
 
     if (rank <= 0) return NULL;
 
-    long lengths[rank], istrides_a[rank], ostrides_a[rank];
+    /* Heap-allocate to avoid VLA stack risk */
+    long *lengths    = (long *)malloc((size_t)rank * sizeof(long));
+    long *istrides_a = (long *)malloc((size_t)rank * sizeof(long));
+    long *ostrides_a = (long *)malloc((size_t)rank * sizeof(long));
+    if (!lengths || !istrides_a || !ostrides_a) {
+        free(lengths); free(istrides_a); free(ostrides_a);
+        return NULL;
+    }
+
     long isuffix = (long)istride;
     long osuffix = (long)ostride;
     for (int d = rank - 1; d >= 0; d--) {
@@ -863,17 +888,19 @@ void *__wrap_fftw_plan_many_dft(
         }
     }
 
-    _bt_hmdim hm[1];
-    hm[0].n  = (long)howmany;
-    hm[0].is = (long)idist;
-    hm[0].os = (long)odist;
+    _bt_hmdim hm;
+    hm.n  = (long)howmany;
+    hm.is = (long)idist;
+    hm.os = (long)odist;
     int l = (howmany > 1) ? 1 : 0;
 
     vDSP_DFT_Direction dir = (sign == -1) ? vDSP_DFT_FORWARD : vDSP_DFT_INVERSE;
 
-    return (void *)_plan_create_common(PLAN_DOUBLE, rank,
-                                       lengths, istrides_a, ostrides_a,
-                                       l, hm, dir);
+    void *plan = (void *)_plan_create_common(PLAN_DOUBLE, rank,
+                                             lengths, istrides_a, ostrides_a,
+                                             l, &hm, dir);
+    free(lengths); free(istrides_a); free(ostrides_a);
+    return plan;
 }
 
 void __wrap_fftw_execute_dft(void *_plan, double _Complex *in, double _Complex *out)

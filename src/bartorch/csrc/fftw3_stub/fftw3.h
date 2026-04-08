@@ -2,7 +2,7 @@
  * fftw3_stub/fftw3.h -- minimal FFTW3 declarations for the Accelerate build path.
  *
  * When bartorch is built on macOS with Apple Accelerate (BARTORCH_USE_ACCELERATE=ON),
- * we do NOT link against a real libfftw3f.  Instead, all fftwf_*/fftw_* symbols are
+ * we do NOT link against a real libfftw3f.  Instead, all fftwf_XXX / fftw_XXX symbols are
  * intercepted by accelerate_fftw_shim.c via the GNU/Apple ld --wrap mechanism and
  * implemented on top of vDSP.
  *

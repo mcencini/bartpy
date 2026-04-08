@@ -81,9 +81,10 @@ jobs:
           cache: pip
 
       - name: Install system dependencies (Homebrew)
-        # fftw  — single-precision FFTW3 (libfftw3f) used by BART and FINUFFT
+        # fftw    — single-precision FFTW3 (libfftw3f) used by BART and FINUFFT
         # openblas — CBLAS + LAPACKE used by BART (cblas.h, lapacke.h, libopenblas)
-        run: brew install cmake fftw openblas
+        # libomp  — OpenMP runtime required by FINUFFT (find_package(OpenMP REQUIRED))
+        run: brew install cmake fftw openblas libomp
 
       - name: Install Python build dependencies
         run: |

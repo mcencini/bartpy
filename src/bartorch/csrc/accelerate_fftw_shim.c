@@ -208,17 +208,17 @@ static void _scatter_d(double _Complex *dst, const double _Complex *src,
 }
 
 /*
- * Compute the base index (when i_d = 0) for fiber `fo` of dimension `skip_d`
+ * Compute the base index (when i_d = 0) for fiber `fib` of dimension `skip_d`
  * in the Fortran-major contig buffer.
  *
  * Fibers of dimension d are indexed by all other index combinations.
- * We enumerate them with a flat other-index `fo` and decompose.
+ * We enumerate them with a flat other-index `fib` and decompose.
  */
-static long _fiber_base(long fo, int skip_d, int k,
+static long _fiber_base(long fib, int skip_d, int k,
                         const long *lengths, const long *strides)
 {
     long base = 0;
-    long rem  = fo;
+    long rem  = fib;
     for (int j = 0; j < k; j++) {
         if (j == skip_d) continue;
         long coord = rem % lengths[j];
@@ -252,18 +252,18 @@ static void _rowcol_fft_f(const _bt_plan *plan,
     float *nxt_r = b_r, *nxt_i = b_i;
 
     for (int d = 0; d < plan->k; d++) {
-        long nd        = plan->lengths[d];
+        long nlen      = plan->lengths[d];
         long sd        = plan->contig_strides[d];
-        long n_fibers  = (long)(plan->nel / (size_t)nd);
+        long n_fibers  = (long)(plan->nel / (size_t)nlen);
 
         vDSP_DFT_Setup setup = (vDSP_DFT_Setup)plan->setups[d];
 
-        for (long fo = 0; fo < n_fibers; fo++) {
-            long base = _fiber_base(fo, d, plan->k,
+        for (long fib = 0; fib < n_fibers; fib++) {
+            long base = _fiber_base(fib, d, plan->k,
                                     plan->lengths, plan->contig_strides);
 
             /* Gather fiber from cur buffer into tmp_in */
-            for (long i = 0; i < nd; i++) {
+            for (long i = 0; i < nlen; i++) {
                 tmp_in_r[i] = cur_r[base + i * sd];
                 tmp_in_i[i] = cur_i[base + i * sd];
             }
@@ -272,7 +272,7 @@ static void _rowcol_fft_f(const _bt_plan *plan,
             vDSP_DFT_Execute(setup, tmp_in_r, tmp_in_i, tmp_out_r, tmp_out_i);
 
             /* Scatter fiber from tmp_out into nxt buffer */
-            for (long i = 0; i < nd; i++) {
+            for (long i = 0; i < nlen; i++) {
                 nxt_r[base + i * sd] = tmp_out_r[i];
                 nxt_i[base + i * sd] = tmp_out_i[i];
             }
@@ -300,24 +300,24 @@ static void _rowcol_fft_d(const _bt_plan *plan,
     double *nxt_r = b_r, *nxt_i = b_i;
 
     for (int d = 0; d < plan->k; d++) {
-        long nd        = plan->lengths[d];
+        long nlen      = plan->lengths[d];
         long sd        = plan->contig_strides[d];
-        long n_fibers  = (long)(plan->nel / (size_t)nd);
+        long n_fibers  = (long)(plan->nel / (size_t)nlen);
 
         vDSP_DFT_SetupD setup = (vDSP_DFT_SetupD)plan->setups[d];
 
-        for (long fo = 0; fo < n_fibers; fo++) {
-            long base = _fiber_base(fo, d, plan->k,
+        for (long fib = 0; fib < n_fibers; fib++) {
+            long base = _fiber_base(fib, d, plan->k,
                                     plan->lengths, plan->contig_strides);
 
-            for (long i = 0; i < nd; i++) {
+            for (long i = 0; i < nlen; i++) {
                 tmp_in_r[i] = cur_r[base + i * sd];
                 tmp_in_i[i] = cur_i[base + i * sd];
             }
 
             vDSP_DFT_ExecuteD(setup, tmp_in_r, tmp_in_i, tmp_out_r, tmp_out_i);
 
-            for (long i = 0; i < nd; i++) {
+            for (long i = 0; i < nlen; i++) {
                 nxt_r[base + i * sd] = tmp_out_r[i];
                 nxt_i[base + i * sd] = tmp_out_i[i];
             }

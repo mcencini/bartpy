@@ -11,21 +11,15 @@ env:
 
 jobs:
   # -------------------------------------------------------------------------
-  # Full test suite — builds the C++ extension (BART embedded) and runs all
-  # tests.  MKL (from mkl/mkl-include Python packages) provides BLAS and FFT.
-  # MKL is detected automatically from torch's install location — no system
-  # BLAS or FFTW3 packages required.
-  #
-  # macOS uses macos-13 (Intel) because MKL has no ARM64 (Apple Silicon)
-  # wheels on PyPI.  macos-latest is ARM64 and would fail at `pip install mkl`.
+  # Linux tests — MKL backend (pip install mkl mkl-include)
   # -------------------------------------------------------------------------
-  tests:
+  tests-linux:
+    name: Tests (Linux, Python ${{ matrix.python-version }})
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest]
         python-version: ["3.10", "3.11", "3.12"]
-    runs-on: ${{ matrix.os }}
+    runs-on: ubuntu-latest
 
     steps:
       - uses: actions/checkout@v4
@@ -40,26 +34,126 @@ jobs:
           python-version: ${{ matrix.python-version }}
           cache: pip
 
-      - name: Install system dependencies (Linux)
-        if: runner.os == 'Linux'
+      - name: Install system dependencies
         run: sudo apt-get install -y cmake
 
-      - name: Install system dependencies (macOS)
-        if: runner.os == 'macOS'
-        run: brew install cmake
-
       - name: Install Python build dependencies
-        # Using --no-build-isolation means pip will NOT auto-install
-        # [build-system].requires, so we install them explicitly here.
-        # mkl + mkl-include are declared in pyproject.toml [build-system].requires;
-        # torch CPU wheel from the WHL index does not bundle MKL.
         run: |
           pip install scikit-build-core pybind11 numpy pytest
           pip install torch --index-url https://download.pytorch.org/whl/cpu
           pip install mkl mkl-include
 
-      - name: Build and install bartorch (compiles C++ extension with BART)
+      - name: Build and install bartorch
         run: pip install -e . --no-build-isolation
 
       - name: Run full test suite
         run: pytest tests/ -v
+
+  # -------------------------------------------------------------------------
+  # macOS tests — OpenBLAS + FFTW3 backend (no MKL on ARM64)
+  #
+  # Uses macos-latest (ARM64 Apple Silicon).  MKL has no ARM64 wheels on PyPI,
+  # so the build falls back to Homebrew-installed OpenBLAS + FFTW3.
+  # -------------------------------------------------------------------------
+  tests-macos:
+    name: Tests (macOS, Python ${{ matrix.python-version }})
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.11", "3.12"]
+    runs-on: macos-latest
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: false
+
+      - name: Initialize submodules
+        run: git submodule update --init --recursive
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+          cache: pip
+
+      - name: Install system dependencies (Homebrew)
+        # fftw  — single-precision FFTW3 (libfftw3f) used by BART and FINUFFT
+        # openblas — CBLAS + LAPACKE used by BART (cblas.h, lapacke.h, libopenblas)
+        run: brew install cmake fftw openblas
+
+      - name: Install Python build dependencies
+        run: |
+          pip install scikit-build-core pybind11 numpy pytest
+          pip install torch --index-url https://download.pytorch.org/whl/cpu
+          # No mkl/mkl-include on macOS: CMakeLists.txt detects OpenBLAS + FFTW3
+
+      - name: Build and install bartorch
+        # Pass explicit prefix hints so CMake can find the Homebrew keg-only
+        # fftw and openblas formulae (they are not in the default search path).
+        run: |
+          FFTW_PREFIX=$(brew --prefix fftw)
+          OPENBLAS_PREFIX=$(brew --prefix openblas)
+          CMAKE_ARGS="-DFFTW_ROOT=${FFTW_PREFIX} -DOPENBLAS_ROOT=${OPENBLAS_PREFIX}" \
+            pip install -e . --no-build-isolation
+
+      - name: Run full test suite
+        run: pytest tests/ -v
+
+  # -------------------------------------------------------------------------
+  # Windows MinGW tests — MSYS2 MINGW64 environment (experimental)
+  #
+  # MSVC cannot compile BART's C99 _Complex arithmetic.  This job uses
+  # MSYS2/MinGW-w64 (GCC) which fully supports C99 complex types.
+  #
+  # The entire toolchain (Python, PyTorch, pybind11, CMake, OpenBLAS, FFTW3)
+  # comes from MSYS2 mingw64 packages so all components share the same ABI.
+  #
+  # Marked continue-on-error while the MinGW build path is being stabilised.
+  # -------------------------------------------------------------------------
+  tests-windows-mingw:
+    name: Tests (Windows MinGW)
+    runs-on: windows-latest
+    continue-on-error: true
+
+    defaults:
+      run:
+        shell: msys2 {0}
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: false
+
+      - uses: msys2/setup-msys2@v2
+        with:
+          msystem: MINGW64
+          update: true
+          install: >-
+            git
+            mingw-w64-x86_64-cmake
+            mingw-w64-x86_64-ninja
+            mingw-w64-x86_64-gcc
+            mingw-w64-x86_64-python
+            mingw-w64-x86_64-python-pip
+            mingw-w64-x86_64-python-numpy
+            mingw-w64-x86_64-python-pytest
+            mingw-w64-x86_64-fftw
+            mingw-w64-x86_64-openblas
+            mingw-w64-x86_64-pybind11
+
+      - name: Initialize submodules
+        run: git submodule update --init --recursive
+
+      - name: Install Python build dependencies
+        run: |
+          pip install scikit-build-core
+          pip install torch --index-url https://download.pytorch.org/whl/cpu
+
+      - name: Build and install bartorch
+        run: |
+          CMAKE_ARGS="-DFFTW_ROOT=/mingw64 -DOPENBLAS_ROOT=/mingw64 -GNinja" \
+            pip install -e . --no-build-isolation
+
+      - name: Run full test suite
+        run: pytest tests/ -v
+

@@ -257,6 +257,10 @@ foreach(_root ${_py_roots})
     endif()
 endforeach()
 
+# Track which FFT backend is active (determines whether the MKL DFTI shim is
+# compiled and whether --wrap,fftwf_* linker flags must be applied).
+set(_use_mkl_shim OFF)
+
 # ── MKL found — use it for CBLAS + FFTW3 (via mkl_fftw_shim) ────────────────
 if(_mkl_include_dir AND _mkl_rt_lib)
     set(CBLAS_INCLUDE_DIR  "${_mkl_include_dir}")
@@ -268,24 +272,130 @@ if(_mkl_include_dir AND _mkl_rt_lib)
     set(FFTW3F_INCLUDE_DIR "${_mkl_include_dir}/fftw")
     set(FFTW3F_LIBRARY     "${_mkl_rt_lib}")
     list(APPEND BART_DEFS USE_MKL)
+    set(_use_mkl_shim ON)
     message(STATUS "BLAS+FFT: MKL (fftwf shim via MKL DFTI)")
     message(STATUS "  headers : ${_mkl_include_dir}")
     message(STATUS "  runtime : ${_mkl_rt_lib}")
 else()
-    # MKL is required — it provides both CBLAS and the FFTW3 compatibility
-    # layer used by BART's FFT routines and FINUFFT.  There is no system
-    # BLAS or FFTW3 fallback: MKL is the only supported backend.
+    # ── Fallback: OpenBLAS (CBLAS + LAPACKE) + real FFTW3f ──────────────────
     #
-    # MKL is co-installed with torch in any standard Python environment.
-    # If this error fires, ensure mkl-include is installed alongside torch:
-    #   pip install mkl mkl-include
-    message(FATAL_ERROR
-        "MKL not found in any Python root (searched: ${_py_roots}).\n"
-        "MKL must be installed in the same Python environment as torch:\n"
-        "  pip install mkl mkl-include\n"
-        "(On a standard `pip install torch` CPU wheel these are pulled in "
-        "automatically as dependencies.)\n"
+    # Used on macOS (no ARM64 MKL wheels on PyPI), Windows with MSYS2/MinGW,
+    # or any system where MKL is not installed.
+    #
+    # Real FFTW3f handles BART's multi-dimensional howmany FFTs correctly
+    # without any shim, unlike MKL's partial FFTW3 compat layer.
+    #
+    # Detection order for each library:
+    #   1. Explicit CMake hint: FFTW_ROOT / OPENBLAS_ROOT (from CMAKE_ARGS)
+    #   2. Homebrew auto-detection on macOS (brew --prefix fftw|openblas)
+    #   3. MSYS2 MinGW standard prefixes on Windows
+    #   4. CMake default system search (standard /usr, /usr/local, pkg-config)
+
+    # ── Collect candidate prefix paths ──────────────────────────────────────
+    set(_fallback_prefixes "")
+
+    # User-supplied hints (highest priority)
+    if(DEFINED FFTW_ROOT)
+        list(APPEND _fallback_prefixes "${FFTW_ROOT}")
+    endif()
+    if(DEFINED OPENBLAS_ROOT)
+        list(APPEND _fallback_prefixes "${OPENBLAS_ROOT}")
+    endif()
+
+    # Homebrew auto-detection (macOS and Linux-with-Homebrew)
+    foreach(_brew_pkg "fftw" "openblas")
+        execute_process(
+            COMMAND brew --prefix "${_brew_pkg}"
+            OUTPUT_VARIABLE _brew_prefix
+            OUTPUT_STRIP_TRAILING_WHITESPACE
+            RESULT_VARIABLE _brew_ret
+            ERROR_QUIET
+        )
+        if(_brew_ret EQUAL 0 AND _brew_prefix)
+            list(APPEND _fallback_prefixes "${_brew_prefix}")
+        endif()
+    endforeach()
+
+    # MSYS2/MinGW standard prefixes (Windows)
+    if(WIN32)
+        list(APPEND _fallback_prefixes
+            "/mingw64" "/ucrt64"
+            "C:/msys64/mingw64" "C:/msys64/ucrt64"
+        )
+    endif()
+
+    # Common system prefixes
+    list(APPEND _fallback_prefixes "/usr/local" "/usr" "/opt/local")
+
+    # ── Find FFTW3f (single-precision) library and header ───────────────────
+    # Priority 1: explicit prefix search
+    find_path(FFTW3F_INCLUDE_DIR NAMES fftw3.h
+        HINTS ${_fallback_prefixes}
+        PATH_SUFFIXES include
+        NO_DEFAULT_PATH
     )
+    # Priority 2: CMake default system search
+    if(NOT FFTW3F_INCLUDE_DIR)
+        find_path(FFTW3F_INCLUDE_DIR NAMES fftw3.h)
+    endif()
+
+    find_library(FFTW3F_LIBRARY
+        NAMES fftw3f libfftw3f fftw3f-3
+        HINTS ${_fallback_prefixes}
+        PATH_SUFFIXES lib lib64 lib/x86_64-linux-gnu
+        NO_DEFAULT_PATH
+    )
+    if(NOT FFTW3F_LIBRARY)
+        find_library(FFTW3F_LIBRARY NAMES fftw3f libfftw3f fftw3f-3)
+    endif()
+
+    # ── Find OpenBLAS (cblas.h + lapacke.h + libopenblas) ───────────────────
+    # cblas.h may live under include/ or include/openblas/ depending on the
+    # package.  We search both and set CBLAS_INCLUDE_DIR to the directory that
+    # directly contains cblas.h so that #include <cblas.h> resolves.
+    find_path(CBLAS_INCLUDE_DIR NAMES cblas.h
+        HINTS ${_fallback_prefixes}
+        PATH_SUFFIXES include include/openblas
+        NO_DEFAULT_PATH
+    )
+    if(NOT CBLAS_INCLUDE_DIR)
+        find_path(CBLAS_INCLUDE_DIR NAMES cblas.h
+            PATH_SUFFIXES include include/openblas
+        )
+    endif()
+
+    find_library(CBLAS_LIBRARY
+        NAMES openblas blas
+        HINTS ${_fallback_prefixes}
+        PATH_SUFFIXES lib lib64 lib/x86_64-linux-gnu
+        NO_DEFAULT_PATH
+    )
+    if(NOT CBLAS_LIBRARY)
+        find_library(CBLAS_LIBRARY NAMES openblas blas)
+    endif()
+
+    # ── Validate and report ──────────────────────────────────────────────────
+    if(FFTW3F_INCLUDE_DIR AND FFTW3F_LIBRARY AND CBLAS_INCLUDE_DIR AND CBLAS_LIBRARY)
+        message(STATUS "BLAS+FFT: OpenBLAS + real FFTW3f (no MKL shim needed)")
+        message(STATUS "  FFTW3f headers : ${FFTW3F_INCLUDE_DIR}")
+        message(STATUS "  FFTW3f library : ${FFTW3F_LIBRARY}")
+        message(STATUS "  CBLAS headers  : ${CBLAS_INCLUDE_DIR}")
+        message(STATUS "  CBLAS library  : ${CBLAS_LIBRARY}")
+        # _use_mkl_shim remains OFF: link real libfftw3f, no --wrap needed.
+    else()
+        message(FATAL_ERROR
+            "Neither MKL nor OpenBLAS+FFTW3f found.\n"
+            "Install the required libraries for your platform:\n"
+            "  macOS  : brew install fftw openblas\n"
+            "  Ubuntu : apt-get install libfftw3-dev libopenblas-dev\n"
+            "  MSYS2  : pacman -S mingw-w64-x86_64-fftw mingw-w64-x86_64-openblas\n"
+            "Or install MKL (Linux/Windows): pip install mkl mkl-include\n"
+            "\n"
+            "For non-standard install locations, pass prefix hints to CMake:\n"
+            "  CMAKE_ARGS='-DFFTW_ROOT=/path/to/fftw -DOPENBLAS_ROOT=/path/to/openblas' "
+            "pip install -e . --no-build-isolation\n"
+        )
+    endif()
 endif()
 
 # ---------------------------------------------------------------------------
@@ -518,11 +628,10 @@ endif()
 # ismrmrd.c       — includes ismrm/read.h → ismrmrd/ismrmrd.h (libismrmrd).
 #                   BART's Makefile only adds this when ISMRM_BASE is set.
 # ismrm/read.c    — same reason (libismrmrd).
-# win/*.c         — Windows POSIX compatibility shims (mmap, fmemopen) that
-#                   redefine POSIX functions already present on Linux/macOS.
-# lapacke/*.c     — BART's bundled LAPACKE shim: requires system lapack.h.
-#                   With MKL (USE_MKL=1) LAPACKE is provided by libmkl_rt.so;
-#                   we don't need the bundled implementation.
+# win/*.c         — Windows POSIX compatibility shims (mmap/shm_open,
+#                   fmemopen).  Absent on Linux/macOS; added below for WIN32.
+# lapacke/*.c     — BART's bundled LAPACKE shim: not needed when LAPACKE is
+#                   provided by MKL (USE_MKL=1) or OpenBLAS.
 list(REMOVE_ITEM _bart_tools_srcs "${BART_SRC_DIR}/ismrmrd.c")
 
 set(BART_SOURCES
@@ -551,10 +660,22 @@ set(BART_SOURCES
     ${_bart_seq_srcs}
     ${_bart_stl_srcs}
     ${_bart_tools_srcs}
-    # ismrm/read.c is intentionally excluded (requires libismrmrd).
-    # win/*.c is intentionally excluded (Windows-only POSIX shims).
-    # lapacke/*.c is intentionally excluded (MKL provides LAPACKE).
+    # ismrm/read.c intentionally excluded (requires libismrmrd).
+    # win/*.c added below for WIN32.
+    # lapacke/*.c not needed (LAPACKE provided by MKL or OpenBLAS).
 )
+
+# On Windows (MinGW), include POSIX compatibility shims that provide
+# mmap/munmap/shm_open (mman.c) and fmemopen (fmemopen.c).  These functions
+# are used by BART's I/O layer but are absent from the Win32 API.
+# On Linux and macOS they are provided by the system C library.
+if(WIN32)
+    list(APPEND BART_SOURCES
+        "${BART_SRC_DIR}/win/mman.c"
+        "${BART_SRC_DIR}/win/fmemopen.c"
+    )
+    message(STATUS "Windows: adding win/mman.c and win/fmemopen.c (POSIX shims)")
+endif()
 
 add_library(bart_static STATIC ${BART_SOURCES})
 target_compile_definitions(bart_static PUBLIC ${BART_DEFS})
@@ -570,8 +691,9 @@ target_compile_options(bart_static PRIVATE
     $<$<COMPILE_LANGUAGE:CUDA>:-O2 --generate-code arch=compute_${CMAKE_CUDA_ARCHITECTURES},code=sm_${CMAKE_CUDA_ARCHITECTURES}>
 )
 
-# Link order: PyTorch → MKL (covers both CBLAS and the fftwf_* symbols that
-# mkl_fftw_shim.c intercepts).  FFTW3F_LIBRARY == CBLAS_LIBRARY == libmkl_rt.
+# Link order: PyTorch → math libraries (CBLAS + FFTW3).
+# With MKL: FFTW3F_LIBRARY == CBLAS_LIBRARY == libmkl_rt; both link the same file.
+# With OpenBLAS: CBLAS_LIBRARY = libopenblas, FFTW3F_LIBRARY = libfftw3f.
 target_link_libraries(bart_static PUBLIC
     ${TORCH_LIBRARIES}
     ${CBLAS_LIBRARY}
@@ -618,19 +740,25 @@ else()
 endif()
 
 # ---------------------------------------------------------------------------
-# MKL FFTW3 shim — intercepts fftwf_plan_guru64_dft via --wrap and routes to
-# MKL DFTI.  MKL's FFTW3 compat layer rejects l > 1 howmany dims; DFTI has
-# no such limitation.  The shim requires mkl_dfti.h from the MKL headers.
+# _bartorch_ext Python extension module
 # ---------------------------------------------------------------------------
-pybind11_add_module(_bartorch_ext
+# Core extension sources (compiled on all platforms)
+set(_bartorch_ext_srcs
     bartorch_ext.cpp
     bart_ops.cpp
     torch_prior.cpp
     torch_prior_nlop.c
-    mkl_fftw_shim.c
     lib_shim.c
     lib_ops.cpp
 )
+# MKL FFTW3 shim: only compiled when MKL is the BLAS/FFT backend.
+# When using real FFTW3 (macOS without MKL, MSYS2, etc.) BART's fftwf_* calls
+# resolve directly against libfftw3f — no interception required.
+if(_use_mkl_shim)
+    list(APPEND _bartorch_ext_srcs mkl_fftw_shim.c)
+endif()
+
+pybind11_add_module(_bartorch_ext ${_bartorch_ext_srcs})
 target_include_directories(_bartorch_ext PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}
     ${BART_SRC_DIR}
@@ -643,31 +771,38 @@ target_link_libraries(_bartorch_ext PRIVATE
 )
 target_compile_definitions(_bartorch_ext PRIVATE ${BART_DEFS})
 
-# --wrap the fftwf_* symbols so mkl_fftw_shim.c intercepts them
-if(APPLE)
-    target_link_options(_bartorch_ext PRIVATE
-        -Wl,-wrap,_fftwf_plan_guru64_dft
-        -Wl,-wrap,_fftwf_execute_dft
-        -Wl,-wrap,_fftwf_destroy_plan
-        -Wl,-wrap,_fftwf_export_wisdom_to_filename
-        -Wl,-wrap,_fftwf_import_wisdom_from_filename
-        -Wl,-wrap,_fftwf_init_threads
-        -Wl,-wrap,_fftwf_plan_with_nthreads
-        -Wl,-wrap,_fftwf_cleanup_threads
-    )
+# --wrap the fftwf_* symbols so mkl_fftw_shim.c intercepts MKL's broken
+# FFTW3 compat layer.  Only applied when the MKL backend is active (_use_mkl_shim=ON).
+# When using real FFTW3 (macOS, MSYS2, etc.) the shim is absent and no --wrap
+# is needed: BART's fftwf_* calls resolve directly against libfftw3f.
+if(_use_mkl_shim)
+    if(APPLE)
+        target_link_options(_bartorch_ext PRIVATE
+            -Wl,-wrap,_fftwf_plan_guru64_dft
+            -Wl,-wrap,_fftwf_execute_dft
+            -Wl,-wrap,_fftwf_destroy_plan
+            -Wl,-wrap,_fftwf_export_wisdom_to_filename
+            -Wl,-wrap,_fftwf_import_wisdom_from_filename
+            -Wl,-wrap,_fftwf_init_threads
+            -Wl,-wrap,_fftwf_plan_with_nthreads
+            -Wl,-wrap,_fftwf_cleanup_threads
+        )
+    else()
+        target_link_options(_bartorch_ext PRIVATE
+            -Wl,--wrap,fftwf_plan_guru64_dft
+            -Wl,--wrap,fftwf_execute_dft
+            -Wl,--wrap,fftwf_destroy_plan
+            -Wl,--wrap,fftwf_export_wisdom_to_filename
+            -Wl,--wrap,fftwf_import_wisdom_from_filename
+            -Wl,--wrap,fftwf_init_threads
+            -Wl,--wrap,fftwf_plan_with_nthreads
+            -Wl,--wrap,fftwf_cleanup_threads
+        )
+    endif()
+    message(STATUS "FFTW shim: --wrap fftwf_plan_guru64_dft active (MKL DFTI backend)")
 else()
-    target_link_options(_bartorch_ext PRIVATE
-        -Wl,--wrap,fftwf_plan_guru64_dft
-        -Wl,--wrap,fftwf_execute_dft
-        -Wl,--wrap,fftwf_destroy_plan
-        -Wl,--wrap,fftwf_export_wisdom_to_filename
-        -Wl,--wrap,fftwf_import_wisdom_from_filename
-        -Wl,--wrap,fftwf_init_threads
-        -Wl,--wrap,fftwf_plan_with_nthreads
-        -Wl,--wrap,fftwf_cleanup_threads
-    )
+    message(STATUS "FFTW: real libfftw3f linked directly (no shim required)")
 endif()
-message(STATUS "FFTW shim: --wrap fftwf_plan_guru64_dft (MKL DFTI backend)")
 
 if(BARTORCH_USE_FINUFFT)
     # finufft_grid.cpp provides __wrap_grid2 / __wrap_grid2H.

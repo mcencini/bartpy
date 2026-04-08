@@ -513,6 +513,40 @@ if(BARTORCH_USE_FINUFFT)
         "FFTW library used by FINUFFT" FORCE)
     set(FINUFFT_FFTW_SUFFIX "" CACHE STRING "" FORCE)   # no _threads/_omp suffix
 
+    # ── Apple Clang OpenMP setup (must come before add_subdirectory) ─────────
+    # Apple's Clang does not include OpenMP; Homebrew installs libomp into a
+    # keg-only path that CMake's FindOpenMP cannot auto-detect.  We query the
+    # prefix with `brew --prefix libomp` and inject the necessary flags so
+    # FINUFFT's find_package(OpenMP REQUIRED) succeeds.  If libomp is absent
+    # (e.g. a minimal CI image), we gracefully disable FINUFFT OpenMP instead
+    # of failing the build — FINUFFT will then run single-threaded.
+    if(APPLE)
+        execute_process(
+            COMMAND brew --prefix libomp
+            OUTPUT_VARIABLE _libomp_prefix
+            OUTPUT_STRIP_TRAILING_WHITESPACE
+            RESULT_VARIABLE _brew_libomp_ret
+            ERROR_QUIET
+        )
+        if(_brew_libomp_ret EQUAL 0 AND EXISTS "${_libomp_prefix}")
+            message(STATUS "Apple OpenMP: libomp found at ${_libomp_prefix}")
+            set(OpenMP_C_FLAGS
+                "-Xpreprocessor -fopenmp -I${_libomp_prefix}/include"
+                CACHE STRING "" FORCE)
+            set(OpenMP_CXX_FLAGS
+                "-Xpreprocessor -fopenmp -I${_libomp_prefix}/include"
+                CACHE STRING "" FORCE)
+            set(OpenMP_C_LIB_NAMES   "omp" CACHE STRING   "" FORCE)
+            set(OpenMP_CXX_LIB_NAMES "omp" CACHE STRING   "" FORCE)
+            set(OpenMP_omp_LIBRARY
+                "${_libomp_prefix}/lib/libomp.dylib"
+                CACHE FILEPATH "" FORCE)
+        else()
+            message(STATUS "Apple OpenMP: libomp not found via brew — FINUFFT will run single-threaded")
+            set(FINUFFT_USE_OPENMP OFF CACHE BOOL "" FORCE)
+        endif()
+    endif()
+
     # ── Build FINUFFT as a subproject ────────────────────────────────────────
     add_subdirectory("${_finufft_dir}" finufft_build EXCLUDE_FROM_ALL)
 

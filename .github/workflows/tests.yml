@@ -81,20 +81,23 @@ jobs:
           cache: pip
 
       - name: Install system dependencies (Homebrew)
-        # fftw    — single-precision FFTW3 (libfftw3f) used by BART and FINUFFT
-        # openblas — CBLAS + LAPACKE used by BART (cblas.h, lapacke.h, libopenblas)
-        # libomp  — OpenMP runtime required by FINUFFT (find_package(OpenMP REQUIRED))
-        run: brew install cmake fftw openblas libomp
+        # libomp   — OpenMP runtime for FINUFFT multi-threaded spreading.
+        #            CMakeLists.txt calls `brew --prefix libomp` to auto-detect it.
+        # fftw / openblas — only needed when BARTORCH_USE_ACCELERATE=OFF (not the
+        #            default). Kept here as a convenience for non-default builds.
+        run: brew install cmake libomp fftw openblas
 
       - name: Install Python build dependencies
         run: |
           pip install scikit-build-core pybind11 numpy pytest
           pip install torch --index-url https://download.pytorch.org/whl/cpu
-          # No mkl/mkl-include on macOS: CMakeLists.txt detects OpenBLAS + FFTW3
+          # No mkl/mkl-include on macOS: default path uses Apple Accelerate.
 
       - name: Build and install bartorch
-        # Pass explicit prefix hints so CMake can find the Homebrew keg-only
-        # fftw and openblas formulae (they are not in the default search path).
+        # Default macOS path: BARTORCH_USE_ACCELERATE=ON (Accelerate.framework).
+        # FFTW_ROOT / OPENBLAS_ROOT are passed as fallback hints for the non-
+        # default BARTORCH_USE_ACCELERATE=OFF path; they are harmless otherwise.
+        # OpenMP is detected automatically from Homebrew libomp inside CMakeLists.txt.
         run: |
           FFTW_PREFIX=$(brew --prefix fftw)
           OPENBLAS_PREFIX=$(brew --prefix openblas)

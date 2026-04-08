@@ -81,12 +81,28 @@ jobs:
           cache: pip
 
       - name: Install system dependencies (Homebrew)
-        # libomp   — OpenMP runtime for FINUFFT multi-threaded spreading.
-        #            CMakeLists.txt calls `brew --prefix libomp` to auto-detect it.
+        # gcc     — BART's official macOS CI (CC: gcc-mp-14) uses GCC, not Apple
+        #            Clang, because Apple Clang 16 cannot handle the recursive MAP
+        #            macro in bart/src/bart.c ("pasting formed 'main_(', an invalid
+        #            preprocessing token" — a hard preprocessor error, not a warning).
+        #            Homebrew GCC handles the macro correctly and supports _Float32
+        #            natively (GCC >= 7), avoiding all Apple Clang workarounds.
+        # libomp   — OpenMP runtime for FINUFFT C++ spreading (Apple Clang C++
+        #            needs Homebrew libomp; GCC C uses its built-in OpenMP).
         # fftw / openblas — required: BARTORCH_USE_ACCELERATE defaults to OFF so
         #            the build uses OpenBLAS (BLAS/LAPACK) + FFTW3 instead of
         #            Apple Accelerate (which lacks LAPACKE and FFTW3 APIs).
-        run: brew install cmake libomp fftw openblas
+        run: |
+          brew install cmake libomp fftw openblas gcc
+          # Find the Homebrew GCC binary (e.g. gcc-14 or gcc-15) and export it
+          # for the build step.  Homebrew installs versioned binaries only;
+          # /opt/homebrew/bin/gcc is a symlink to Apple's cc, not Homebrew GCC.
+          GCC_BIN=$(ls /opt/homebrew/bin/gcc-* 2>/dev/null | grep -E 'gcc-[0-9]+$' | sort -V | tail -1)
+          if [ -z "${GCC_BIN}" ]; then
+            echo "ERROR: Homebrew GCC not found in /opt/homebrew/bin. Install with: brew install gcc" >&2
+            exit 1
+          fi
+          echo "BARTORCH_GCC=${GCC_BIN}" >> "$GITHUB_ENV"
 
       - name: Install Python build dependencies
         run: |
@@ -95,14 +111,14 @@ jobs:
           # No mkl/mkl-include on macOS: build uses OpenBLAS + FFTW3 (see above).
 
       - name: Build and install bartorch
-        # Default macOS path: BARTORCH_USE_ACCELERATE=OFF — uses OpenBLAS + FFTW3.
-        # Apple Accelerate lacks LAPACKE (lapacke.h) and FFTW3, so it is not the
-        # default.  FFTW_ROOT / OPENBLAS_ROOT point CMake to the Homebrew installs.
-        # OpenMP is detected automatically from Homebrew libomp inside CMakeLists.txt.
+        # Use Homebrew GCC as C compiler (CMAKE_C_COMPILER) to match BART's own
+        # macOS CI.  C++ compiler is explicitly set to Apple Clang (clang++) to
+        # maintain PyTorch ABI compatibility (PyTorch uses libc++, not libstdc++).
+        # FFTW_ROOT / OPENBLAS_ROOT point CMake to the Homebrew installs.
         run: |
           FFTW_PREFIX=$(brew --prefix fftw)
           OPENBLAS_PREFIX=$(brew --prefix openblas)
-          CMAKE_ARGS="-DFFTW_ROOT=${FFTW_PREFIX} -DOPENBLAS_ROOT=${OPENBLAS_PREFIX}" \
+          CMAKE_ARGS="-DFFTW_ROOT=${FFTW_PREFIX} -DOPENBLAS_ROOT=${OPENBLAS_PREFIX} -DCMAKE_C_COMPILER=${BARTORCH_GCC} -DCMAKE_CXX_COMPILER=$(xcrun -f clang++)" \
             pip install -e . --no-build-isolation
 
       - name: Run full test suite

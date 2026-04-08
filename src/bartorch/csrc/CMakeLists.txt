@@ -511,13 +511,19 @@ if(BARTORCH_USE_FINUFFT)
         "FFTW library used by FINUFFT" FORCE)
     set(FINUFFT_FFTW_SUFFIX "" CACHE STRING "" FORCE)   # no _threads/_omp suffix
 
-    # ── Apple Clang OpenMP setup (must come before add_subdirectory) ─────────
-    # Apple's Clang does not include OpenMP; Homebrew installs libomp into a
+    # ── Apple OpenMP setup (must come before add_subdirectory) ───────────────
+    # Apple's Clang does not bundle OpenMP; Homebrew installs libomp into a
     # keg-only path that CMake's FindOpenMP cannot auto-detect.  We query the
-    # prefix with `brew --prefix libomp` and inject the necessary flags so
-    # FINUFFT's find_package(OpenMP REQUIRED) succeeds.  If libomp is absent
-    # (e.g. a minimal CI image), we gracefully disable FINUFFT OpenMP instead
-    # of failing the build — FINUFFT will then run single-threaded.
+    # prefix with `brew --prefix libomp` and inject the necessary CXX flags so
+    # FINUFFT's find_package(OpenMP REQUIRED) succeeds for the C++ compiler.
+    #
+    # BART's macOS CI uses GCC as C compiler (CC: gcc-mp-14).  When Homebrew
+    # GCC is also used here (recommended), its built-in OpenMP support is found
+    # automatically by CMake's FindOpenMP — no manual C flags are needed.  Only
+    # the CXX flags (always Apple Clang on macOS for PyTorch ABI compatibility)
+    # require the -Xpreprocessor libomp injection.
+    #
+    # If libomp is absent, FINUFFT OpenMP is disabled (single-threaded fallback).
     if(APPLE)
         execute_process(
             COMMAND brew --prefix libomp
@@ -528,13 +534,23 @@ if(BARTORCH_USE_FINUFFT)
         )
         if(_brew_libomp_ret EQUAL 0 AND EXISTS "${_libomp_prefix}")
             message(STATUS "Apple OpenMP: libomp found at ${_libomp_prefix}")
-            set(OpenMP_C_FLAGS
-                "-Xpreprocessor -fopenmp -I${_libomp_prefix}/include"
-                CACHE STRING "" FORCE)
+            # Only inject -Xpreprocessor libomp flags for Apple Clang C.
+            # Homebrew GCC has built-in OpenMP (-fopenmp) and must NOT use
+            # -Xpreprocessor (a Clang-specific preprocessor pass-through flag).
+            # OpenMP_C_LIB_NAMES is also left unset for GCC: CMake's FindOpenMP
+            # will auto-detect libgomp for GCC, and bart_static does not link
+            # OpenMP::OpenMP_C at all (no -fopenmp in bart_static's compile
+            # options), so the C OpenMP library name is irrelevant in practice.
+            if(CMAKE_C_COMPILER_ID STREQUAL "AppleClang")
+                set(OpenMP_C_FLAGS
+                    "-Xpreprocessor -fopenmp -I${_libomp_prefix}/include"
+                    CACHE STRING "" FORCE)
+                set(OpenMP_C_LIB_NAMES   "omp" CACHE STRING   "" FORCE)
+            endif()
+            # C++ compiler on macOS is always Apple Clang (PyTorch ABI compat).
             set(OpenMP_CXX_FLAGS
                 "-Xpreprocessor -fopenmp -I${_libomp_prefix}/include"
                 CACHE STRING "" FORCE)
-            set(OpenMP_C_LIB_NAMES   "omp" CACHE STRING   "" FORCE)
             set(OpenMP_CXX_LIB_NAMES "omp" CACHE STRING   "" FORCE)
             set(OpenMP_omp_LIBRARY
                 "${_libomp_prefix}/lib/libomp.dylib"
@@ -802,31 +818,34 @@ target_compile_options(bart_static PRIVATE
     $<$<COMPILE_LANGUAGE:CUDA>:-O2 --generate-code arch=compute_${CMAKE_CUDA_ARCHITECTURES},code=sm_${CMAKE_CUDA_ARCHITECTURES}>
 )
 
-# Apple Clang-specific compile flags — mirrors BART's own Makefile logic:
+# macOS compile flags for BART C sources.
 #
-#   ifeq ($(findstring clang,$(CC)),clang)
-#     CFLAGS += -fblocks
-#     LDFLAGS += -lBlocksRuntime
-#   ...
+# BART's official macOS CI uses GCC as C compiler (CC: gcc-mp-14), not Apple
+# Clang, because:
+#   1. Apple Clang 16 cannot handle the recursive MAP macro in bart/src/bart.c.
+#      `MAP(DENTRY, MAIN_BASE)` causes a hard preprocessor error:
+#      "pasting formed 'main_(', an invalid preprocessing token".
+#      This is NOT suppressible with -Wno-* flags — it is a preprocessor error.
+#   2. GCC handles NESTED() via GNU nested functions (no -fblocks extension).
+#   3. GCC >= 7 natively supports _Float32 — no -D_Float32=float needed.
 #
-# 1. -fblocks: required for the NESTED() macro in bart/src/misc/nested.h.
-#    On Clang, NESTED(RET, NAME, ARGS) expands to a Block closure ^ARGS which
-#    requires the Blocks extension.  Files affected include num/optimize.c,
-#    iter/iter2.c, motion/interpolate.c, noncart/grid.c, simu/simulation.c etc.
-#    On macOS, the Blocks runtime is part of libSystem — no -lBlocksRuntime needed.
+# Recommended macOS build command (matches BART's own CI approach):
+#   GCC=$(ls /opt/homebrew/bin/gcc-* | grep -E 'gcc-[0-9]+$' | sort -V | tail -1)
+#   CMAKE_ARGS="-DCMAKE_C_COMPILER=${GCC}" pip install -e . --no-build-isolation
 #
-# 2. -Wno-implicit-function-declaration / -Wno-int-conversion: BART's
-#    bart/src/misc/cppmap.h EXPAND macro provides 128 scan passes.  MAIN_LIST
-#    in mainlist.inc has ~144 tools; the MAP macro needs 3 passes per tool, so
-#    tools beyond position ~42 are not fully forward-declared by
-#    MAP(DECLMAIN, MAIN_LIST) in main.h.  Apple Clang 16 promotes both
-#    -Wimplicit-function-declaration and -Wint-conversion to hard errors by
-#    default, causing a build failure in bart.c's dispatch table.  Suppressing
-#    them restores the GCC-compatible build behaviour.
-#
-# 3. _Float32=float: Apple Clang does not support the GCC/C23 optional type
-#    _Float32 used in bart/src/stl/misc.c.
-if(APPLE)
+# The Apple Clang block below is retained only as a fallback (e.g. for
+# developers who have not installed Homebrew GCC).  It works around most Apple
+# Clang 16 issues, but the MAP ##() error in bart.c will still cause the build
+# to fail.  Use GCC for a working build.
+if(APPLE AND CMAKE_C_COMPILER_ID STREQUAL "AppleClang")
+    # -fblocks: required for NESTED() macro (Block closure syntax on Clang).
+    #   On macOS, the Blocks runtime is part of libSystem — no -lBlocksRuntime.
+    # -Wno-implicit-function-declaration / -Wno-int-conversion: suppress Apple
+    #   Clang 16 errors from MAP(DECLMAIN, MAIN_LIST) in main.h (MAP's EXPAND
+    #   provides 128 passes, but MAIN_LIST has ~144 tools so ~16 tools are left
+    #   undeclared).  NOTE: these flags do NOT fix the ##() paste error in
+    #   bart.c — only using GCC resolves that.
+    # _Float32=float: Apple Clang does not support this GCC/C23 optional type.
     target_compile_options(bart_static PRIVATE
         $<$<COMPILE_LANGUAGE:C>:
             -fblocks

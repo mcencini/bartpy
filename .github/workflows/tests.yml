@@ -104,62 +104,12 @@ jobs:
         run: pytest tests/ -v
 
   # -------------------------------------------------------------------------
-  # Windows MinGW tests — MSYS2 MINGW64 environment (experimental)
+  # Windows support is deferred.
   #
-  # MSVC cannot compile BART's C99 _Complex arithmetic.  This job uses
-  # MSYS2/MinGW-w64 (GCC) which fully supports C99 complex types.
-  #
-  # The entire toolchain (Python, PyTorch, pybind11, CMake, OpenBLAS, FFTW3)
-  # comes from MSYS2 mingw64 packages so all components share the same ABI.
-  #
-  # Marked continue-on-error while the MinGW build path is being stabilised.
+  # bartorch's shim architecture (mkl_fftw_shim, finufft_grid, torch_prior,
+  # cufinufft_grid) relies on the GNU linker's --wrap mechanism to intercept
+  # symbol calls at link time.  Windows linkers (link.exe, lld-link) do not
+  # support --wrap, making the current architecture fundamentally incompatible
+  # with Windows without a major redesign.
   # -------------------------------------------------------------------------
-  tests-windows-mingw:
-    name: Tests (Windows MinGW)
-    runs-on: windows-latest
-    continue-on-error: true
-    permissions:
-      contents: read
-
-    defaults:
-      run:
-        shell: msys2 {0}
-
-    steps:
-      - uses: actions/checkout@v4
-        with:
-          submodules: false
-
-      - uses: msys2/setup-msys2@v2
-        with:
-          msystem: MINGW64
-          update: true
-          install: >-
-            git
-            mingw-w64-x86_64-cmake
-            mingw-w64-x86_64-ninja
-            mingw-w64-x86_64-gcc
-            mingw-w64-x86_64-python
-            mingw-w64-x86_64-python-pip
-            mingw-w64-x86_64-python-numpy
-            mingw-w64-x86_64-python-pytest
-            mingw-w64-x86_64-fftw
-            mingw-w64-x86_64-openblas
-            mingw-w64-x86_64-pybind11
-
-      - name: Initialize submodules
-        run: git submodule update --init --recursive
-
-      - name: Install Python build dependencies
-        run: |
-          pip install scikit-build-core
-          pip install torch --index-url https://download.pytorch.org/whl/cpu
-
-      - name: Build and install bartorch
-        run: |
-          CMAKE_ARGS="-DFFTW_ROOT=/mingw64 -DOPENBLAS_ROOT=/mingw64 -GNinja" \
-            pip install -e . --no-build-isolation
-
-      - name: Run full test suite
-        run: pytest tests/ -v
 

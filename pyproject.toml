@@ -2,7 +2,8 @@
 requires = [
     "scikit-build-core>=0.9",
     "torch",        # provides libtorch + cmake config at build time
-    # MKL wheels are only available for x86-64 Linux and Windows.
+    # MKL wheels are available for x86-64 Linux (and Windows, though Windows
+    # is not currently supported — see CMakeLists.txt for details).
     # On macOS (no ARM64 MKL on PyPI) the build falls back to
     # OpenBLAS + real FFTW3 — install via: brew install fftw openblas
     "mkl; sys_platform != 'darwin'",          # MKL runtime (libmkl_rt)
@@ -20,8 +21,8 @@ requires-python = ">=3.9"
 dependencies = [
     "torch>=2.0",
     "numpy>=1.21",
-    # MKL runtime is the BLAS/FFT backend on Linux and Windows.
-    # On macOS the build uses OpenBLAS + FFTW3 (no MKL runtime needed at runtime).
+    # MKL runtime is the BLAS/FFT backend on Linux (and Windows, not currently
+    # supported). On macOS the build uses OpenBLAS + FFTW3 (no MKL at runtime).
     "mkl; sys_platform != 'darwin'",
 ]
 classifiers = [

@@ -279,17 +279,20 @@ if(_mkl_include_dir AND _mkl_rt_lib)
 else()
     # ── Fallback: OpenBLAS (CBLAS + LAPACKE) + real FFTW3f ──────────────────
     #
-    # Used on macOS (no ARM64 MKL wheels on PyPI), Windows with MSYS2/MinGW,
-    # or any system where MKL is not installed.
+    # Used on macOS (no ARM64 MKL wheels on PyPI) or any system where MKL is
+    # not installed.
     #
-    # Real FFTW3f handles BART's multi-dimensional howmany FFTs correctly
-    # without any shim, unlike MKL's partial FFTW3 compat layer.
+    # Real FFTW3f handles BART's multi-dimensional howmany (batched) FFTs
+    # correctly without any shim, unlike MKL's partial FFTW3 compat layer.
+    #
+    # NOTE: Windows is currently not supported.  bartorch's shim architecture
+    # (mkl_fftw_shim, finufft_grid, torch_prior) relies on the GNU linker
+    # --wrap mechanism, which is unavailable on Windows (link.exe, lld-link).
     #
     # Detection order for each library:
     #   1. Explicit CMake hint: FFTW_ROOT / OPENBLAS_ROOT (from CMAKE_ARGS)
     #   2. Homebrew auto-detection on macOS (brew --prefix fftw|openblas)
-    #   3. MSYS2 MinGW standard prefixes on Windows
-    #   4. CMake default system search (standard /usr, /usr/local, pkg-config)
+    #   3. CMake default system search (standard /usr, /usr/local, pkg-config)
 
     # ── Collect candidate prefix paths ──────────────────────────────────────
     set(_fallback_prefixes "")
@@ -315,14 +318,6 @@ else()
             list(APPEND _fallback_prefixes "${_brew_prefix}")
         endif()
     endforeach()
-
-    # MSYS2/MinGW standard prefixes (Windows)
-    if(WIN32)
-        list(APPEND _fallback_prefixes
-            "/mingw64" "/ucrt64"
-            "C:/msys64/mingw64" "C:/msys64/ucrt64"
-        )
-    endif()
 
     # Common system prefixes
     list(APPEND _fallback_prefixes "/usr/local" "/usr" "/opt/local")
@@ -388,8 +383,7 @@ else()
             "Install the required libraries for your platform:\n"
             "  macOS  : brew install fftw openblas\n"
             "  Ubuntu : apt-get install libfftw3-dev libopenblas-dev\n"
-            "  MSYS2  : pacman -S mingw-w64-x86_64-fftw mingw-w64-x86_64-openblas\n"
-            "Or install MKL (Linux/Windows): pip install mkl mkl-include\n"
+            "Or install MKL: pip install mkl mkl-include\n"
             "\n"
             "For non-standard install locations, pass prefix hints to CMake:\n"
             "  CMAKE_ARGS='-DFFTW_ROOT=/path/to/fftw -DOPENBLAS_ROOT=/path/to/openblas' "
@@ -665,10 +659,12 @@ set(BART_SOURCES
     # lapacke/*.c not needed (LAPACKE provided by MKL or OpenBLAS).
 )
 
-# On Windows (MinGW), include POSIX compatibility shims that provide
-# mmap/munmap/shm_open (mman.c) and fmemopen (fmemopen.c).  These functions
-# are used by BART's I/O layer but are absent from the Win32 API.
-# On Linux and macOS they are provided by the system C library.
+# On Windows (if ever revisited), include POSIX compatibility shims that
+# provide mmap/munmap/shm_open (mman.c) and fmemopen (fmemopen.c).  These
+# are used by BART's I/O layer but absent from the Win32 API.
+# NOTE: Windows is not currently supported due to --wrap linker limitations.
+#       These sources are included here to avoid compile errors when someone
+#       attempts a Windows build and to ease a future port.
 if(WIN32)
     list(APPEND BART_SOURCES
         "${BART_SRC_DIR}/win/mman.c"

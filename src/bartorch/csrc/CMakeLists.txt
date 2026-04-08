@@ -791,6 +791,12 @@ target_compile_options(bart_static PRIVATE
     $<$<COMPILE_LANGUAGE:CUDA>:-O2 --generate-code arch=compute_${CMAKE_CUDA_ARCHITECTURES},code=sm_${CMAKE_CUDA_ARCHITECTURES}>
 )
 
+# Apple Clang does not support _Float32 (a GCC/C23 extension used in
+# bart/src/stl/misc.c).  Define it to float so the struct definition compiles.
+if(APPLE)
+    target_compile_definitions(bart_static PRIVATE "_Float32=float")
+endif()
+
 # Link order: PyTorch → math libraries (CBLAS + FFTW3).
 # With MKL: FFTW3F_LIBRARY == CBLAS_LIBRARY == libmkl_rt; both link the same file.
 # With OpenBLAS: CBLAS_LIBRARY = libopenblas, FFTW3F_LIBRARY = libfftw3f.

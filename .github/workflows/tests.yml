@@ -20,6 +20,8 @@ jobs:
       matrix:
         python-version: ["3.10", "3.11", "3.12"]
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
 
     steps:
       - uses: actions/checkout@v4
@@ -62,6 +64,8 @@ jobs:
       matrix:
         python-version: ["3.11", "3.12"]
     runs-on: macos-latest
+    permissions:
+      contents: read
 
     steps:
       - uses: actions/checkout@v4
@@ -114,6 +118,8 @@ jobs:
     name: Tests (Windows MinGW)
     runs-on: windows-latest
     continue-on-error: true
+    permissions:
+      contents: read
 
     defaults:
       run:

@@ -6,15 +6,13 @@ project(bartorch_ext LANGUAGES C CXX)
 # ---------------------------------------------------------------------------
 option(USE_CUDA "Build with CUDA support" OFF)
 option(BARTORCH_USE_FINUFFT "Replace BART's Kaiser-Bessel gridder with FINUFFT's optimised ES-kernel spreader" ON)
-# On macOS, use Apple Accelerate (vDSP + CBLAS) instead of requiring Homebrew
-# fftw and openblas.  Accelerate is part of the macOS SDK and is always available.
-# Set to OFF to fall back to the OpenBLAS + real FFTW3f path (still requires
-# brew install fftw openblas).
-if(APPLE)
-    option(BARTORCH_USE_ACCELERATE "Use Apple Accelerate (vDSP) for BLAS+FFT on macOS (eliminates Homebrew fftw/openblas requirement)" ON)
-else()
-    option(BARTORCH_USE_ACCELERATE "Use Apple Accelerate (vDSP) for BLAS+FFT on macOS (eliminates Homebrew fftw/openblas requirement)" OFF)
-endif()
+# On macOS, the Apple Accelerate vDSP shim can replace Homebrew fftw/openblas for
+# FFT.  However, Apple's vecLib does NOT provide lapacke.h (the LAPACKE C interface),
+# which BART's num/lapack.c requires.  Until a full LAPACKE stub is in place,
+# the default is OFF: the OpenBLAS + real FFTW3f path is used instead, which
+# provides both cblas.h and lapacke.h (brew install fftw openblas).
+# Set to ON only when you also supply LAPACKE headers via a custom include path.
+option(BARTORCH_USE_ACCELERATE "Use Apple Accelerate (vDSP) for BLAS+FFT on macOS (eliminates Homebrew fftw/openblas requirement)" OFF)
 # ---------------------------------------------------------------------------
 # Find PyTorch (libtorch)
 # ---------------------------------------------------------------------------

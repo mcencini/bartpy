@@ -703,8 +703,8 @@ file(GLOB _bart_sake_srcs    "${BART_SRC_DIR}/sake/*.c")
 file(GLOB _bart_geom_srcs    "${BART_SRC_DIR}/geom/*.c")
 file(GLOB _bart_seq_srcs     "${BART_SRC_DIR}/seq/*.c")
 file(GLOB _bart_stl_srcs     "${BART_SRC_DIR}/stl/*.c")
-# Top-level tool files: each bart/src/<tool>.c provides main_<tool>()
-# as well as the main dispatcher (bart.c) and entry-point wrapper (main.c).
+# Top-level tool files: each bart/src/<tool>.c provides main_<tool>().
+# Also includes bart.c (provides bart_command()) and bbox.c/main.c (excluded below).
 file(GLOB _bart_tools_srcs   "${BART_SRC_DIR}/*.c")
 
 # CUDA device-code sources — only included when USE_CUDA=ON.
@@ -721,7 +721,8 @@ else()
     set(_bart_noncart_cu_srcs "")
 endif()
 
-# Exclude files that require external optional libraries without #ifdef guards:
+# Exclude files that require external optional libraries without #ifdef guards,
+# or that conflict with our library build:
 #
 # ismrmrd.c       — includes ismrm/read.h → ismrmrd/ismrmrd.h (libismrmrd).
 #                   BART's Makefile only adds this when ISMRM_BASE is set.
@@ -730,7 +731,17 @@ endif()
 #                   fmemopen).  Absent on Linux/macOS; added below for WIN32.
 # lapacke/*.c     — BART's bundled LAPACKE shim: not needed when LAPACKE is
 #                   provided by MKL (USE_MKL=1) or OpenBLAS.
-list(REMOVE_ITEM _bart_tools_srcs "${BART_SRC_DIR}/ismrmrd.c")
+# main.c          — defines int main() which conflicts in a shared library.
+# bbox.c          — does `#define main_bart main_bbox; #include "bart.c"`.
+#                   This re-include causes Apple Clang to fail on the MAP macro
+#                   sentinel (##()) in bart.c's dispatch_table.  The bbox tool
+#                   is not registered in mainlist.inc so excluding it here has
+#                   no functional impact on bart_command().
+list(REMOVE_ITEM _bart_tools_srcs
+    "${BART_SRC_DIR}/ismrmrd.c"
+    "${BART_SRC_DIR}/main.c"
+    "${BART_SRC_DIR}/bbox.c"
+)
 
 set(BART_SOURCES
     ${_bart_misc_srcs}
@@ -786,7 +797,7 @@ target_include_directories(bart_static PUBLIC
     ${CBLAS_INCLUDE_DIR}
 )
 target_compile_options(bart_static PRIVATE
-    $<$<COMPILE_LANGUAGE:C>:-fPIC -O2 -std=gnu11>
+    $<$<COMPILE_LANGUAGE:C>:-fPIC -O2 -std=gnu17>
     $<$<COMPILE_LANGUAGE:CXX>:-fPIC -O2>
     $<$<COMPILE_LANGUAGE:CUDA>:-O2 --generate-code arch=compute_${CMAKE_CUDA_ARCHITECTURES},code=sm_${CMAKE_CUDA_ARCHITECTURES}>
 )
